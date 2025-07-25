@@ -20,9 +20,9 @@ def main():
     # Create or derive API credentials (this is where the API key, secret, and passphrase are generated)
     try:
         api_creds = client.create_or_derive_api_creds()
-        print("API Key:", api_creds.api_key)
-        print("Secret:", api_creds.api_secret)
-        print("Passphrase:", api_creds.api_passphrase)
+        print(f"API_KEY={api_creds.api_key}")
+        print(f"SECRET={api_creds.api_secret}")
+        print(f"PASSPHRASE={api_creds.api_passphrase}")
 
         # You should now save these securely (e.g., store them in your .env file)
     except Exception as e:
