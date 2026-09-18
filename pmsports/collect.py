@@ -149,20 +149,22 @@ def build_games(sport: str = "mlb", refresh_pm: bool = True) -> pd.DataFrame:
 def _fetch_one(g, d: Path, what: set[str]) -> dict:
     pk = int(g.game_pk)
     stats = {"game_pk": pk}
-    end = next((t for t in (g.finished_ts, g.closed_ts) if pd.notna(t)), g.start_ts + 6 * 3600)
-    end = min(end, g.start_ts + 10 * 3600) + 1800  # guard against stale closed_ts
+    # MLB's scheduled start is reliable; some early-2025 Gamma events carry a wrong startTime
+    start = g.game_ts if pd.notna(getattr(g, "game_ts", None)) else g.start_ts
+    end = next((t for t in (g.finished_ts, g.closed_ts) if pd.notna(t)), start + 6 * 3600)
+    end = min(max(end, start + 3 * 3600), start + 10 * 3600) + 1800  # guard stale/early timestamps
     if "plays" in what and not (d / "plays" / f"{pk}.parquet").exists():
         p = pd.DataFrame(mlb.plays(pk))
         _write(p, d / "plays" / f"{pk}.parquet")
         stats["plays"] = len(p)
     if "prices" in what and not (d / "prices" / f"{pk}.parquet").exists():
-        h = pm.price_history(g.home_token, int(g.start_ts - 24 * 3600), int(end))
+        h = pm.price_history(g.home_token, int(start - 24 * 3600), int(end))
         p = pd.DataFrame(h, columns=["t", "p"]).rename(columns={"t": "ts", "p": "home_p"})
         p.insert(0, "game_pk", pk)
         _write(p, d / "prices" / f"{pk}.parquet")
         stats["prices"] = len(p)
     if "trades" in what and not (d / "trades" / f"{pk}.parquet").exists():
-        t = pd.DataFrame(pm.trades(g.condition_id, int(g.start_ts - 3 * 3600), int(end)),
+        t = pd.DataFrame(pm.trades(g.condition_id, int(start - 3 * 3600), int(end)),
                          columns=list(pm.TRADE_FIELDS))
         t.insert(0, "game_pk", pk)
         # implied probability of the HOME team from every fill, whichever token traded

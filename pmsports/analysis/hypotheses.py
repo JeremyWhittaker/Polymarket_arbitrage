@@ -246,27 +246,39 @@ LAT_BUCKETS = [(-30, 0), (0, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 60)
 TRADE_TS_LAG_S = 2.5
 
 
-def h4_latency(plays: pd.DataFrame, trades: pd.DataFrame, games: pd.DataFrame,
+TRADE_COLS = ["timestamp", "side", "outcomeIndex", "price", "size", "home_p"]
+
+
+def h4_latency(plays: pd.DataFrame, trades_dir, games: pd.DataFrame,
                min_move: float = 0.03, ts_lag: float = TRADE_TS_LAG_S) -> dict:
-    """Reaction of trade prices to scoring plays, measured from the moment of contact."""
-    home_idx = games.set_index("game_pk").home_outcome_idx
-    tr = trades.merge(home_idx.rename("home_idx"), left_on="game_pk", right_index=True)
-    tr["timestamp"] = tr.timestamp - ts_lag      # approximate match time
-    # did the taker buy the home side? (BUY home token, or SELL away token)
-    tr["taker_buys_home"] = (tr.outcomeIndex == tr.home_idx) == (tr.side == "BUY")
-    tr["usd"] = tr.price * tr["size"]
-    by_game = {k: g.sort_values("timestamp") for k, g in tr.groupby("game_pk")}
+    """Reaction of trade prices to scoring plays, measured from the moment of contact.
+
+    Trades are read one game at a time (only the columns needed) so memory stays
+    flat regardless of how many games have been collected.
+    """
+    home_idx = games.set_index("game_pk").home_outcome_idx.to_dict()
+    have = {int(f.stem) for f in trades_dir.glob("*.parquet")} & set(home_idx)
+
+    def load(pk: int) -> pd.DataFrame:
+        g = pd.read_parquet(trades_dir / f"{pk}.parquet", columns=TRADE_COLS).sort_values("timestamp")
+        g["timestamp"] = g.timestamp - ts_lag      # approximate match time
+        # did the taker buy the home side? (BUY home token, or SELL away token)
+        g["taker_buys_home"] = (g.outcomeIndex == home_idx[pk]) == (g.side == "BUY")
+        g["usd"] = g.price * g["size"]
+        return g
 
     p = plays.sort_values(["game_pk", "play_idx"]).copy()
     p["next_contact"] = p.groupby("game_pk").contact_ts.shift(-1)
     p["prev_end"] = p.groupby("game_pk").end_ts.shift(1)
-    ev = p[p.is_scoring & p.game_pk.isin(by_game.keys())].copy()
+    ev = p[p.is_scoring & p.game_pk.isin(have)].copy()
     ev = ev[(ev.next_contact - ev.contact_ts > 90) & (ev.contact_ts - ev.prev_end > 20)]
 
     recs, curve = [], []
     grid = np.arange(-30, 91, 1)
-    for e in ev.itertuples(index=False):
-        g = by_game[e.game_pk]
+    cur_pk, g = None, None
+    for e in ev.sort_values("game_pk").itertuples(index=False):
+        if e.game_pk != cur_pk:
+            cur_pk, g = e.game_pk, load(e.game_pk)
         ts, hp = g.timestamp.to_numpy(float), g.home_p.to_numpy(float)
         t0 = e.contact_ts
         sign = 1.0 if e.half == "bottom" else -1.0   # bottom half = home batting

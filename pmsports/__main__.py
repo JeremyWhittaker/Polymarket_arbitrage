@@ -7,6 +7,7 @@
   report       run every hypothesis test -> reports/
   audit        data coverage / quality summary
   record       live capture: order books + Polymarket score feed + MLB linescore
+  live-latency per-scoring-play latency from a recorded day (ms clocks)
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ def main() -> None:
     rc = sub.add_parser("record")
     rc.add_argument("--hours", type=float, default=6.0)
     rc.add_argument("--window", type=float, default=4.0, help="subscribe to games starting within N hours")
+    ll = sub.add_parser("live-latency")
+    ll.add_argument("--day", required=True, help="UTC date folder under data/live/")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -60,6 +63,14 @@ def main() -> None:
     elif a.cmd == "record":
         from .record import record
         record(a.hours, a.window)
+    elif a.cmd == "live-latency":
+        from .analysis.live import live_latency
+        df = live_latency(a.day)
+        if df.empty:
+            print("no scoring plays with book data yet")
+        else:
+            print(df.round(2).to_string(index=False))
+            print(df[["book_t50", "sports_t", "mlb_t", "spread"]].describe().round(2).to_string())
 
 
 if __name__ == "__main__":

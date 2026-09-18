@@ -88,10 +88,9 @@ def run_all(split_date: str = "2026-01-01", sport: str = "mlb") -> None:
     h3 = H.h3_fair_value(panel, baseline, split_date)
     log.info("H4 latency")
     plays = _load_dir(d / "plays")
-    trades = _load_dir(d / "trades")
     g = games[games.game_pk.notna()].copy()
     g["game_pk"] = g.game_pk.astype(int)
-    h4 = H.h4_latency(plays, trades, g)
+    h4 = H.h4_latency(plays, d / "trades", g)
 
     chart_calibration(h1["table"], OUT / "h1_calibration.png")
     if "curve" in h4:
