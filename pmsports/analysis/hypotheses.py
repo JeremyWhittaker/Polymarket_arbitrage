@@ -183,7 +183,9 @@ def h3_fair_value(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str,
 
     # does the model add information beyond the market? (logit stacking on the test set)
     X = sm.add_constant(np.column_stack([logit(test.mkt_p), logit(test.model_p) - logit(test.mkt_p)]))
-    stack = sm.Logit(test.y.values, X).fit(disp=0)
+    # cluster by game: ~90 plate appearances per game are not independent observations
+    stack = sm.Logit(test.y.values, X).fit(disp=0, cov_type="cluster",
+                                          cov_kwds={"groups": test.game_pk.to_numpy()})
 
     rows = []
     test["edge_home"] = test.model_p - test.mkt_p

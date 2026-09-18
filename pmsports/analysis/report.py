@@ -184,7 +184,8 @@ def _render(h1, h2, h3, h4, games, pregame, panel, split_date) -> list[str]:
               _md(h3["scores"], ".4f"), "",
               f"Stacking test (does the model add information the market lacks?): coefficient on "
               f"(model - market) = {h3['stack_coef_model_minus_market']:+.3f} "
-              f"(se {h3['stack_se_model_minus_market']:.3f}). ~0 means the market already contains the model.", "",
+              f"(game-clustered se {h3['stack_se_model_minus_market']:.3f}). ~0 means the market already contains the model. "
+              "A positive value with a losing backtest means the model only helps inside the bid/ask + fee band.", "",
               "Backtest: first state per game where |model - market| > threshold; buy the side the model "
               "prefers at market + 1c, hold to resolution:", "", _md(h3["backtest"]), "",
               "Your literal idea - cell = (inning, half, score diff, pregame-favorite bucket), fair = the "
