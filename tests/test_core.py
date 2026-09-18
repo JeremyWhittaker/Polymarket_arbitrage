@@ -74,3 +74,10 @@ def test_bet_pnl_fair_coin_loses_exactly_the_fee():
 def test_wilson_bounds():
     lo, hi = wilson(50, 100)
     assert lo < 0.5 < hi
+
+
+def test_asof_handles_empty_and_before_start():
+    from pmsports.panel import _asof
+    assert np.isnan(_asof(np.array([]), np.array([]), np.array([5.0]))).all()
+    out = _asof(np.array([10.0, 20.0]), np.array([0.4, 0.6]), np.array([5.0, 15.0, 25.0]))
+    assert np.isnan(out[0]) and out[1] == 0.4 and out[2] == 0.6

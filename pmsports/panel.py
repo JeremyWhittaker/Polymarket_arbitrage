@@ -67,9 +67,10 @@ def state_rows(plays: pd.DataFrame) -> pd.DataFrame:
 
 def _asof(ts: np.ndarray, vals: np.ndarray, q: np.ndarray) -> np.ndarray:
     """Last value at or before each query time (NaN if none)."""
+    if len(ts) == 0:
+        return np.full(len(q), np.nan)
     i = np.searchsorted(ts, q, side="right") - 1
-    out = np.where(i >= 0, vals[np.clip(i, 0, None)], np.nan)
-    return out
+    return np.where(i >= 0, vals[np.clip(i, 0, None)], np.nan)
 
 
 def build_panel(sport: str = "mlb") -> None:
