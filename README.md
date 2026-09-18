@@ -16,6 +16,29 @@ subgraph, Polygonscan scraping and Selenium, and nothing new depends on them.
 
 Latest results: [`reports/REPORT.md`](reports/REPORT.md).
 
+## Findings so far (2026-09-18: 4,664 games from 2025-26, baseline of 14.5k games from 2021-26)
+
+| Hypothesis | Result |
+|---|---|
+| Pregame favorites beat their price | **No.** Favorites won 56.1% at an average price of 57.4% (calibration slope 0.84, se 0.08). Betting every favorite: **-4.3%** ROI with the 5% fee. Betting every underdog: +3.1% without fees (CI -0.1% to +6.6%) but **-2.0%** after fee + 1c. |
+| "Up X runs going into inning Z" is mispriced | **No.** In every inning/lead cell, the market price matches the realized win rate within noise. Example: leading by 2 into the 7th, priced 0.824, won 0.833. |
+| Trade toward a fair value (model or state average), out of sample | **No.** The market forecasts better than the model (log-loss 0.518 vs 0.527), and the stacking coefficient is ~0 (+0.003, se 0.091). The literal "bet toward the state's average price" rule loses **7-14%** in 2026. |
+| Bet after seeing a play, before the market moves | **Not from a TV or a free feed.** Across 6,471 historical scoring plays, trades reach halfway to the new price a median ~7s after contact. Live ms-clock capture (8 plays so far): the **order book is halfway re-priced in 3.5s** (sometimes <1.5s), while **Polymarket's own score feed and the free MLB API update ~27s after contact**. Stale fills still available after 20s: ~2% of plays. |
+
+Bugs that fake an edge (each one is fixed in the pipeline):
+
+1. At first pitch Polymarket clears the book and prints a glitch bar (0.50 or an empty-book
+   midpoint). Using that bar as the "pregame price" made favorites look 20 points overpriced.
+2. With no trading, the 1-minute bar freezes. For example, it sat at 0.54 while a team led by 10.
+   Using those bars made "buy the late-inning leader" look like +3% after fees. In-game states
+   are now priced only from actual fills.
+3. Data-API trade timestamps are on-chain settlement times, a median of 2.6s after the match.
+   Measured by matching transaction hashes against the live websocket; corrected in the latency tests.
+
+What could still work: being the **maker** rather than the taker (no fee, plus a 15%
+rebate), or a data feed faster than Polymarket's own (~27s). The second one is what
+courtsiders and official-data feeds sell. `record` + `live-latency` measure both.
+
 ## Quick start
 
 ```bash
@@ -27,11 +50,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pmsports report         # hypothesis tests -> reports/REPORT.md
 .venv/bin/python -m pmsports audit          # coverage by month
 .venv/bin/python -m pmsports record --hours 6   # live capture (run in tmux during games)
+.venv/bin/python -m pmsports live-latency --day 2026-09-18   # ms-clock latency from a recorded day
 .venv/bin/python -m pytest -q tests
 ```
 
 Every step is resumable: rerun it and it fills only what's missing. Data goes to
-`data/` (git-ignored, ~1-2 GB for two seasons).
+`data/` (git-ignored, ~0.7 GB for two seasons; the live recorder writes ~150 MB/hour
+for a full slate). Panel/report stream per game and peak at ~1.6 GB RSS. On a shared host,
+run them under a cap: `systemd-run --user --scope -p MemoryMax=6G ...`.
 
 ## Data sources (verified 2026-09)
 
@@ -72,6 +98,7 @@ pmsports/
   analysis/
     hypotheses.py  H1 calibration, H2 state tables, H3 out-of-sample backtest, H4 latency
     report.py      renders reports/REPORT.md + CSV + charts
+    live.py        per-scoring-play latency from a recorded day
 tests/             unit tests (fee formula, orientation fix, state machine, P&L math)
 legacy/            2024 election-arbitrage scripts (unmaintained)
 ```

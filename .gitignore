@@ -6,3 +6,4 @@ data/
 keys.env
 *.tmp
 logs/
+reports/h4_latency_events.csv
