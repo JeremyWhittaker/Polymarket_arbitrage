@@ -149,7 +149,7 @@ def build_games(sport: str = "mlb", refresh_pm: bool = True) -> pd.DataFrame:
 def _fetch_one(g, d: Path, what: set[str]) -> dict:
     pk = int(g.game_pk)
     stats = {"game_pk": pk}
-    end = g.finished_ts or g.closed_ts or (g.start_ts + 6 * 3600)
+    end = next((t for t in (g.finished_ts, g.closed_ts) if pd.notna(t)), g.start_ts + 6 * 3600)
     end = min(end, g.start_ts + 10 * 3600) + 1800  # guard against stale closed_ts
     if "plays" in what and not (d / "plays" / f"{pk}.parquet").exists():
         p = pd.DataFrame(mlb.plays(pk))
