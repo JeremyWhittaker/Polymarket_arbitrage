@@ -78,33 +78,39 @@ def build_panel(sport: str = "mlb") -> None:
     games = games[games.game_pk.notna() & ~games.resolution_mismatch]
     games["game_pk"] = games.game_pk.astype(int)
     plays = _load_dir(d / "plays")
-    prices = _load_dir(d / "prices")
-    trades = _load_dir(d / "trades")
-    log.info("loaded %d plays, %d price bars, %d trades", len(plays), len(prices), len(trades))
+    log.info("loaded %d plays", len(plays))
 
-    have = set(plays.game_pk) & set(prices.game_pk)
+    have = {int(f.stem) for f in (d / "prices").glob("*.parquet")} & set(plays.game_pk)
     games = games[games.game_pk.isin(have)].copy()
     first_pitch = plays.groupby("game_pk").start_ts.min()
     games["first_pitch_ts"] = games.game_pk.map(first_pitch)
     games["home_won_final"] = games.mlb_home_won.astype("boolean").fillna(games.home_won.astype("boolean"))
 
-    px = {k: (g.ts.to_numpy(float), g.home_p.to_numpy(float))
-          for k, g in prices.sort_values("ts").groupby("game_pk")}
-    tr = {k: (g.timestamp.to_numpy(float), g.home_p.to_numpy(float), g["size"].to_numpy(float))
-          for k, g in trades.sort_values("timestamp").groupby("game_pk")} if len(trades) else {}
+    # per-game readers (numeric columns only): memory stays flat with thousands of games
+    def px_of(pk: int):
+        g = pd.read_parquet(d / "prices" / f"{pk}.parquet", columns=["ts", "home_p"]).sort_values("ts")
+        return g.ts.to_numpy(float), g.home_p.to_numpy(float)
+
+    def tr_of(pk: int):
+        f = d / "trades" / f"{pk}.parquet"
+        if not f.exists():
+            return None
+        g = pd.read_parquet(f, columns=["timestamp", "home_p"]).sort_values("timestamp")
+        return g.timestamp.to_numpy(float) - TRADE_TS_LAG_S, g.home_p.to_numpy(float)
 
     # ---- pregame
     pre = []
     for g in games.itertuples(index=False):
-        ts, v = px[g.game_pk]
+        ts, v = px_of(g.game_pk)
         fp = g.first_pitch_ts
         # NOT the last bar before first pitch: the book is cleared at game start and
         # prices-history prints a glitch bar (0.50 / empty-book midpoint) right there
         m_bar = (ts >= fp - 900) & (ts <= fp - 120)
         p_bar = float(np.median(v[m_bar])) if m_bar.any() else _asof(ts, v, np.array([fp - 120]))[0]
         p_tr, n_tr = np.nan, 0
-        if g.game_pk in tr:
-            tts, tv, _ = tr[g.game_pk]
+        t = tr_of(g.game_pk)
+        if t is not None:
+            tts, tv = t
             m = (tts >= fp - PREGAME_WIN_S) & (tts < fp)
             n_tr = int(m.sum())
             if n_tr:
@@ -123,14 +129,14 @@ def build_panel(sport: str = "mlb") -> None:
                   on="game_pk")
     parts = []
     for pk, g in st.groupby("game_pk"):
-        ts, v = px[pk]
+        ts, v = px_of(pk)
         q = g.state_ts.to_numpy(float)
         g = g.copy()
         g["mkt_p_bar"] = _asof(ts, v, q + SETTLE_S)
         g["mkt_p_trades"], g["mkt_n_trades"] = np.nan, 0
-        if pk in tr:
-            tts, tv, _ = tr[pk]
-            tts = tts - TRADE_TS_LAG_S                 # settlement -> match time
+        t = tr_of(pk)
+        if t is not None:
+            tts, tv = t
             lo = np.searchsorted(tts, q + 15)
             hi = np.searchsorted(tts, q + 75)
             g["mkt_p_trades"] = [float(np.median(tv[a:b])) if b > a else np.nan for a, b in zip(lo, hi)]
