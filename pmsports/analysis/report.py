@@ -144,7 +144,7 @@ def _render(h1, h2, h3, h4, games, pregame, panel, split_date) -> list[str]:
     L += ["## Data", "",
           f"- Polymarket MLB game events: {len(games):,}; joined to MLB game_pk: {games.game_pk.notna().sum():,}",
           f"- Games with pregame price + outcome: {h1['n_games']:,}",
-          f"- In-game state rows (plate appearances with a market price): {len(panel):,} "
+          f"- In-game state rows priced by >=3 actual fills 15-75s after the play: {len(panel):,} "
           f"({int(panel.checkpoint.sum()):,} half-inning checkpoints)",
           f"- Baseline (MLB-only) games for win-expectancy tables: {h2['baseline_games']:,} "
           f"(seasons {h2['baseline_seasons'][0]}-{h2['baseline_seasons'][-1]})", ""]
@@ -205,6 +205,9 @@ def _render(h1, h2, h3, h4, games, pregame, panel, split_date) -> list[str]:
               _latency_table(s), "",
               "![latency](h4_latency.png)", ""]
     L += ["## Caveats", "",
+          "- In-game states are priced only where >=3 fills printed 15-75s after the play (19% of 2025 "
+          "states, 62% of 2026). 1-minute bars are NOT used in-game: with no fills they sit frozen "
+          "(e.g. 0.54 while a team leads by 10) and manufacture fake edges.",
           "- 1-minute price bars are last-trade/mid samples, not executable quotes; H1-H3 add 1c slippage "
           "to approximate crossing the spread. Real books for live MLB are usually 1-2c wide but thin.",
           "- Polymarket clears the book at first pitch (`clearBookOnStart`); the 'pregame price' is the "

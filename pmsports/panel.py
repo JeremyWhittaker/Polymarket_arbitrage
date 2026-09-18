@@ -144,9 +144,10 @@ def build_panel(sport: str = "mlb") -> None:
             g["mkt_n_trades"] = hi - lo
         parts.append(g)
     panel = pd.concat(parts, ignore_index=True)
-    # market price for a state = median fill 15-75s after the play (what was actually traded);
-    # the 1-min bar is a fallback only, it can be a stale or empty-book midpoint
-    panel["mkt_p"] = panel.mkt_p_trades.where(panel.mkt_n_trades >= MIN_TRADES, panel.mkt_p_bar)
+    # market price for a state = median fill 15-75s after the play (what was actually traded).
+    # No bar fallback: with no fills the 1-min bar can sit frozen for innings (e.g. 0.54 while a
+    # team leads by 10), which fabricates "edges" nobody could trade. Such states are dropped.
+    panel["mkt_p"] = panel.mkt_p_trades.where(panel.mkt_n_trades >= MIN_TRADES)
     # stale bars after resolution (price pinned at 0/1) are not tradable states
     panel = panel[panel.mkt_p.between(0.005, 0.995)]
     _write(panel, d / "panel.parquet")
