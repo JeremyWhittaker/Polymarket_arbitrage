@@ -198,7 +198,8 @@ def _render(h1, h2, h3, h4, games, pregame, panel, split_date) -> list[str]:
     else:
         s = h4["summary"]
         L += ["Clock: MLB Statcast timestamp of the in-play pitch vs Polymarket fill timestamps "
-              "(1s resolution, Polygon block time). `t50` = seconds until a fill prints at least "
+              "(1s resolution, on-chain settlement time, shifted 2.5s earlier to approximate match time - "
+              "measured by matching tx hashes against the live CLOB websocket). `t50` = seconds until a fill prints at least "
               "halfway to the post-play price. `stale fill` = a taker bought the scoring side at a "
               "price < 25% of the way to the new level (someone's old resting order got picked off).", "",
               _latency_table(s), "",

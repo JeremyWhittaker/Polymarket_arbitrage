@@ -241,13 +241,17 @@ def _naive_state_average(train: pd.DataFrame, test: pd.DataFrame, slip: float) -
 # ----------------------------------------------------------------------------- H4
 
 LAT_BUCKETS = [(-30, 0), (0, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 60)]
+# Data-API trade timestamps are on-chain settlement times; matched against the CLOB
+# websocket's match timestamps (same tx hash) they run ~2.4-3.3s late (2026-09-18 sample).
+TRADE_TS_LAG_S = 2.5
 
 
 def h4_latency(plays: pd.DataFrame, trades: pd.DataFrame, games: pd.DataFrame,
-               min_move: float = 0.03) -> dict:
+               min_move: float = 0.03, ts_lag: float = TRADE_TS_LAG_S) -> dict:
     """Reaction of trade prices to scoring plays, measured from the moment of contact."""
     home_idx = games.set_index("game_pk").home_outcome_idx
     tr = trades.merge(home_idx.rename("home_idx"), left_on="game_pk", right_index=True)
+    tr["timestamp"] = tr.timestamp - ts_lag      # approximate match time
     # did the taker buy the home side? (BUY home token, or SELL away token)
     tr["taker_buys_home"] = (tr.outcomeIndex == tr.home_idx) == (tr.side == "BUY")
     tr["usd"] = tr.price * tr["size"]
