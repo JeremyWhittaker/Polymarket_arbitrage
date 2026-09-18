@@ -22,6 +22,8 @@ log = logging.getLogger("pmsports")
 
 SETTLE_S = 60        # market price sampled this long after the play ends
 PREGAME_WIN_S = 600  # trade window before first pitch for the trade-based pregame price
+MIN_TRADES = 3       # fills needed before a trade-median price is preferred over bars
+TRADE_TS_LAG_S = 2.5 # Data-API timestamps are on-chain settlement, ~2.6s after the match
 
 
 def _load_dir(path: Path) -> pd.DataFrame:
@@ -96,7 +98,10 @@ def build_panel(sport: str = "mlb") -> None:
     for g in games.itertuples(index=False):
         ts, v = px[g.game_pk]
         fp = g.first_pitch_ts
-        p_bar = _asof(ts, v, np.array([fp]))[0]
+        # NOT the last bar before first pitch: the book is cleared at game start and
+        # prices-history prints a glitch bar (0.50 / empty-book midpoint) right there
+        m_bar = (ts >= fp - 900) & (ts <= fp - 120)
+        p_bar = float(np.median(v[m_bar])) if m_bar.any() else _asof(ts, v, np.array([fp - 120]))[0]
         p_tr, n_tr = np.nan, 0
         if g.game_pk in tr:
             tts, tv, _ = tr[g.game_pk]
@@ -108,7 +113,8 @@ def build_panel(sport: str = "mlb") -> None:
     pre = pd.DataFrame(pre, columns=["game_pk", "pre_p_bar", "pre_p_trades", "pre_n_trades"])
     pregame = games[["game_pk", "slug", "event_date", "game_type", "home_team", "away_team",
                      "volume", "fee_rate", "first_pitch_ts", "home_won_final"]].merge(pre, on="game_pk")
-    pregame["pre_p"] = pregame.pre_p_bar.fillna(pregame.pre_p_trades)
+    # actual fills are the most trustworthy pregame price; bars only when trading was thin
+    pregame["pre_p"] = pregame.pre_p_trades.where(pregame.pre_n_trades >= MIN_TRADES, pregame.pre_p_bar)
     _write(pregame, d / "pregame.parquet")
 
     # ---- in-game panel
@@ -120,17 +126,20 @@ def build_panel(sport: str = "mlb") -> None:
         ts, v = px[pk]
         q = g.state_ts.to_numpy(float)
         g = g.copy()
-        g["mkt_p"] = _asof(ts, v, q + SETTLE_S)
-        g["mkt_p_at_play"] = _asof(ts, v, q)
+        g["mkt_p_bar"] = _asof(ts, v, q + SETTLE_S)
+        g["mkt_p_trades"], g["mkt_n_trades"] = np.nan, 0
         if pk in tr:
             tts, tv, _ = tr[pk]
+            tts = tts - TRADE_TS_LAG_S                 # settlement -> match time
             lo = np.searchsorted(tts, q + 15)
             hi = np.searchsorted(tts, q + 75)
             g["mkt_p_trades"] = [float(np.median(tv[a:b])) if b > a else np.nan for a, b in zip(lo, hi)]
-        else:
-            g["mkt_p_trades"] = np.nan
+            g["mkt_n_trades"] = hi - lo
         parts.append(g)
     panel = pd.concat(parts, ignore_index=True)
+    # market price for a state = median fill 15-75s after the play (what was actually traded);
+    # the 1-min bar is a fallback only, it can be a stale or empty-book midpoint
+    panel["mkt_p"] = panel.mkt_p_trades.where(panel.mkt_n_trades >= MIN_TRADES, panel.mkt_p_bar)
     # stale bars after resolution (price pinned at 0/1) are not tradable states
     panel = panel[panel.mkt_p.between(0.005, 0.995)]
     _write(panel, d / "panel.parquet")

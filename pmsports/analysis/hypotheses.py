@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
+from ..panel import TRADE_TS_LAG_S  # on-chain settlement lag, measured vs CLOB websocket
 from .stats import bet_pnl, bootstrap_mean, brier, log_loss, logit, wilson
 
 CURRENT_FEE = 0.05   # sports taker fee rate since 2026-07
@@ -241,9 +242,6 @@ def _naive_state_average(train: pd.DataFrame, test: pd.DataFrame, slip: float) -
 # ----------------------------------------------------------------------------- H4
 
 LAT_BUCKETS = [(-30, 0), (0, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 60)]
-# Data-API trade timestamps are on-chain settlement times; matched against the CLOB
-# websocket's match timestamps (same tx hash) they run ~2.4-3.3s late (2026-09-18 sample).
-TRADE_TS_LAG_S = 2.5
 
 
 TRADE_COLS = ["timestamp", "side", "outcomeIndex", "price", "size", "home_p"]
