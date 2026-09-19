@@ -203,3 +203,27 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
                             "pnl_per_$1": float((rr.copy_roi * rr.w).sum()), "staked": float(rr.w.sum()),
                             "in_play_share": float(rr.in_play.mean())})
     return pd.DataFrame(out)
+
+
+def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30)) -> pd.DataFrame:
+    """The P1 FDR-significant wallets, copied in P2: timing (delay) x sizing (equal vs their $) x phase."""
+    ts = pd.Timestamp(split, tz="UTC").timestamp()
+    s1 = skill.wallet_stats(skill.positions(t[t.timestamp < ts]))
+    fdr = skill.fdr_survivors(s1[s1.markets >= MIN_MKTS].z).tolist()
+    t2 = t[t.timestamp >= ts]
+    rows = t2[t2.proxyWallet.isin(fdr)]
+    mk = t2[t2.condition_id.isin(rows.condition_id.unique())]
+    rows = mk[mk.proxyWallet.isin(fdr)]
+    cp = skill.copy_prices(mk, rows, delays=delays)
+    out = []
+    for phase, m in (("all", None), ("pregame", ~cp.in_play), ("in_play", cp.in_play)):
+        part = cp if m is None else cp[m]
+        for stake in ("proportional", "equal"):
+            for d in delays:
+                c = skill.summarize_copy(skill.copy_returns(part, d, stake=stake))
+                out.append({"phase": phase, "stake": stake, "delay_s": d, "trades": c["trades"],
+                            "copy_roi": c["roi"], "ci95": f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"})
+    df = pd.DataFrame(out)
+    df.attrs.update(wallets=len(fdr), fills=len(rows), in_play_share=float(rows.in_play.mean()),
+                    median_trade_usd=float((rows["size"] * rows.q).median()))
+    return df

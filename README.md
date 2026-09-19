@@ -1,6 +1,6 @@
-# Polymarket sports research (MLB)
+# Polymarket sports research
 
-Tests whether you can make money on Polymarket MLB moneylines by:
+Tests whether you can make money on Polymarket sports moneylines by:
 
 1. **Timing**: betting right after something happens in the game (e.g. a home run),
    before the market reprices.
@@ -9,6 +9,11 @@ Tests whether you can make money on Polymarket MLB moneylines by:
    average and holding to the end of the game.
 3. **Pregame favorites**: finding out whether favorites win more often than their
    price implies.
+4. **Copying sharp bettors**: finding wallets that are genuinely good at predicting
+   baseball, soccer, tennis and other sports (by win rate, P&L or luck-adjusted skill,
+   and whales by size), then mirroring their trades.
+
+Items 1-3 were tested on MLB and item 4 on all sports.
 
 The 2024 election-arbitrage scripts this repo started with are in
 [`legacy/election_2024/`](legacy/election_2024/). They rely on the deprecated Goldsky
@@ -16,7 +21,7 @@ subgraph, Polygonscan scraping and Selenium, and nothing new depends on them.
 
 Latest results: [`reports/REPORT.md`](reports/REPORT.md).
 
-## Findings so far (2026-09-18: 4,664 games from 2025-26, baseline of 14.5k games from 2021-26)
+## MLB findings (2026-09-18: 4,664 games from 2025-26, baseline of 14.5k games from 2021-26)
 
 | Hypothesis | Result |
 |---|---|
@@ -39,6 +44,30 @@ What could still work: being the **maker** rather than the taker (no fee, plus a
 rebate), or a data feed faster than Polymarket's own (~27s). The second one is what
 courtsiders and official-data feeds sell. `record` + `live-latency` measure both.
 
+## Copy-the-sharps study (all sports) — [`reports/WALLETS.md`](reports/WALLETS.md)
+
+Data: 53.8M wallet-attributed taker fills in 38,364 resolved sports moneyline markets with
+at least $50k of volume (soccer, tennis, esports, basketball, baseball, hockey, NFL, cricket,
+MMA), from 833k wallets. Wallets are selected on 2025 data and copied in 2026, with no
+look-ahead. Each copy executes at the first *other* taker print on the same side, d seconds
+later, pays the taker fee, and is held to resolution.
+
+| Question | Answer |
+|---|---|
+| Do skilled bettors exist? | **Yes, a few.** 99 wallets clear a false-discovery-rate cut on 2025 luck-adjusted z, where ~31 would clear z > 3 by luck alone. They stayed profitable in 2026: **+3.9%** on their own fills (CI +2.1% to +5.9%). |
+| Can you copy them? | **No.** 94% of their trades are in-play, with a median fill of $4 (bots). The edge falls from +3.9% at their price to +1.1% 1s later, +0.2% at 5s and -0.9% at 30s. Their wallet only becomes visible after on-chain settlement (~2.6s), so you are always late. |
+| Does skill persist in general? | **Barely.** The 2025-vs-2026 rank correlation of z across 7,148 wallets is 0.04, and the z-decile table is flat. |
+| Follow the whales (biggest $ wallets, or any $10k+/$50k+ trade)? | **No.** $10k+ trades copied at 30s: -1.1%. $1k+ trades: -1.5% (CI -1.9% to -1.0%). Prices don't move toward whale trades within 5 minutes. |
+| Highest win rate / top ROI / top P&L / Polymarket leaderboard? | **None beat random wallets out of sample.** A few per-sport cells look positive (basketball top-ROI +39%, CI +1% to +95%), but that is expected by chance across ~60 sport × rule tests. |
+| Monthly re-selection (walk-forward)? | Top-z wallets: -0.6% at their own price, **-5.4% one second later**. Whales: +1.6% at their price, -1.0% at 30s. Pregame-only top-z: +1.1% at 60s, positive in 8 of 14 months (not significant). |
+| Who tops the leaderboard? | The top 100 by volume are market makers earning ~0.04% of volume, plus losing takers. Among the top 100 by P&L, 59 had no 2025 on-chain activity, and margins run 2-11%. Makers' edge (spread + rebates) cannot be copied by a taker. |
+
+On-chain access: [CryptoHouse](https://crypto-clickhouse.clickhouse.com) (free SQL, user
+`crypto`) has every CTF-exchange `OrderFilled` event through 2026-01-05 (the V2 exchange
+migration). Public-user limits are 2,000 rows, 1 MB and 60s per query, so it is used for
+wallet aggregates (`pmsports/wallets/onchain.py`). `/trades?user=` silently returns nothing for
+most of 2025, so the study builds per-market tapes from `/trades?market=` instead.
+
 ## Quick start
 
 ```bash
@@ -51,6 +80,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pmsports audit          # coverage by month
 .venv/bin/python -m pmsports record --hours 6   # live capture (run in tmux during games)
 .venv/bin/python -m pmsports live-latency --day 2026-09-18   # ms-clock latency from a recorded day
+.venv/bin/python -m pmsports universe       # every resolved sports game market, all leagues (~25 min)
+.venv/bin/python -m pmsports tapes          # wallet-attributed fills, moneylines >= $50k (~3 h, resumable)
+.venv/bin/python -m pmsports wallets-report # copy-the-sharps study -> reports/WALLETS.md (~40 min, 14 GB cap)
 .venv/bin/python -m pytest -q tests
 ```
 
@@ -99,6 +131,13 @@ pmsports/
     hypotheses.py  H1 calibration, H2 state tables, H3 out-of-sample backtest, H4 latency
     report.py      renders reports/REPORT.md + CSV + charts
     live.py        per-scoring-play latency from a recorded day
+  wallets/
+    universe.py    all resolved sports game markets (Gamma tag 100639), sport family, payouts
+    tapes.py       per-market taker tapes; streaming loader (54M fills in ~2 GB)
+    skill.py       positions, luck-adjusted z, FDR, executable copy prices, clustered bootstrap
+    study.py       selection rules vs placebo, walk-forward, big-trade signal, skilled decomposition
+    onchain.py     CryptoHouse queries (maker/taker profile per wallet)
+    report.py      renders reports/WALLETS.md
 tests/             unit tests (fee formula, orientation fix, state machine, P&L math)
 legacy/            2024 election-arbitrage scripts (unmaintained)
 ```
