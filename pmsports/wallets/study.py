@@ -188,9 +188,10 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
         chosen = {r: (x if len(x) <= max_rows else
                       x[x.event_slug.isin(x.event_slug.drop_duplicates().sample(
                           frac=max_rows / len(x), random_state=int(a) % 2**31))]) for r, x in chosen.items()}
-        allrows = pd.concat([x.assign(_rule=r) for r, x in chosen.items() if len(x)])
-        if allrows.empty:
+        parts = [x.assign(_rule=r) for r, x in chosen.items() if len(x)]
+        if not parts:
             continue
+        allrows = pd.concat(parts)
         cp = skill.copy_prices(nxt, allrows, delays=tuple(delays))
         for r in rules:
             part = cp[cp._rule == r]

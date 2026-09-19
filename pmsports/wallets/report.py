@@ -36,6 +36,48 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     t = load_trades(u)
     log.info("loaded %d fills, %d wallets, %d markets", len(t), t.proxyWallet.nunique(), t.condition_id.nunique())
 
+    cache = OUT / "report_cache"
+    cache.mkdir(exist_ok=True)
+
+    def cached(name, fn):
+        f = cache / f"{name}.pkl"
+        if f.exists():
+            return pd.read_pickle(f)
+        obj = fn()
+        pd.to_pickle(obj, f)
+        return obj
+
+    fams, rules, decs = cached("families", lambda: _families(t, lb, split))
+    t2 = t[t.timestamp >= pd.Timestamp(split, tz="UTC").timestamp()]
+    log.info("big-trade signal")
+    big = cached("bigtrades", lambda: study.big_trade_signal(t2))
+    del t2
+    log.info("walk-forward")
+    wf = cached("walkforward", lambda: _walk(t, walk_start, walk_end))
+    wfa = wf.groupby(["scope", "rule", "delay"]).apply(lambda x: pd.Series({
+        "months": len(x), "trades": x.trades.sum(), "copy_roi": x["pnl_per_$1"].sum() / x.staked.sum(),
+        "months_positive": (x["pnl_per_$1"] > 0).mean()}), include_groups=False).reset_index()
+
+    for name, df in [("wallets_families", fams), ("wallets_rules", rules), ("wallets_deciles", decs),
+                     ("wallets_bigtrades", big), ("wallets_walkforward", wfa)]:
+        df.to_csv(REPORTS / f"{name}.csv", index=False)
+    (REPORTS / "WALLETS.md").write_text(_render(t, fams, rules, decs, big, wfa, lb, split))
+    log.info("wrote %s", REPORTS / "WALLETS.md")
+
+
+def _walk(t, walk_start, walk_end) -> pd.DataFrame:
+    wf = [study.walk_forward(t, walk_start, walk_end, delays=(0, 1, 5, 30)).assign(scope="all"),
+          study.walk_forward(t[~t.in_play], walk_start, walk_end, rules=("z", "random"),
+                             delays=(0, 60, 300)).assign(scope="pregame")]
+    for fam in ("soccer", "tennis", "basketball", "baseball", "esports", "hockey", "american_football"):
+        tf = t[t.family == fam]
+        if len(tf) > 100_000:
+            wf.append(study.walk_forward(tf, walk_start, walk_end, rules=("z", "random"),
+                                         delays=(0, 5, 30)).assign(scope=fam))
+    return pd.concat([w for w in wf if len(w)], ignore_index=True)
+
+
+def _families(t, lb, split):
     fam_rows, rule_tables, deciles = [], [], []
     for fam in ["ALL"] + FAMILIES:
         tf = t if fam == "ALL" else t[t.family == fam]
@@ -58,29 +100,7 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     fams = pd.DataFrame(fam_rows)
     rules = pd.concat(rule_tables, ignore_index=True)
     decs = pd.concat(deciles, ignore_index=True) if deciles else pd.DataFrame()
-
-    t2 = t[t.timestamp >= pd.Timestamp(split, tz="UTC").timestamp()]
-    log.info("big-trade signal")
-    big = study.big_trade_signal(t2)
-    log.info("walk-forward")
-    wf = [study.walk_forward(t, walk_start, walk_end, delays=(0, 1, 5, 30)).assign(scope="all"),
-          study.walk_forward(t[~t.in_play], walk_start, walk_end, rules=("z", "random"),
-                             delays=(0, 60, 300)).assign(scope="pregame")]
-    for fam in ("soccer", "tennis", "basketball", "baseball", "esports"):
-        tf = t[t.family == fam]
-        if len(tf) > 100_000:
-            wf.append(study.walk_forward(tf, walk_start, walk_end, rules=("z", "random"),
-                                         delays=(0, 5, 30)).assign(scope=fam))
-    wf = pd.concat(wf, ignore_index=True)
-    wfa = wf.groupby(["scope", "rule", "delay"]).apply(lambda x: pd.Series({
-        "months": len(x), "trades": x.trades.sum(), "copy_roi": x["pnl_per_$1"].sum() / x.staked.sum(),
-        "months_positive": (x["pnl_per_$1"] > 0).mean()}), include_groups=False).reset_index()
-
-    for name, df in [("wallets_families", fams), ("wallets_rules", rules), ("wallets_deciles", decs),
-                     ("wallets_bigtrades", big), ("wallets_walkforward", wfa)]:
-        df.to_csv(REPORTS / f"{name}.csv", index=False)
-    (REPORTS / "WALLETS.md").write_text(_render(t, fams, rules, decs, big, wfa, lb, split))
-    log.info("wrote %s", REPORTS / "WALLETS.md")
+    return fams, rules, decs
 
 
 def _render(t, fams, rules, decs, big, wfa, lb, split) -> str:
