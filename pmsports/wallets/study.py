@@ -157,33 +157,45 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
     return pd.DataFrame(rows)
 
 
-def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180, rule: str = "z",
-                 delays=(0, 30)) -> pd.DataFrame:
-    """Each month: pick top-K wallets on the trailing window, copy their next-month trades."""
+def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180,
+                 rules=("z", "whales", "random"), delays=(0, 30), max_rows: int = 40_000) -> pd.DataFrame:
+    """Each month: pick top-K wallets on the trailing window, copy their next-month trades.
+
+    Positions are computed once (keyed by first-fill time); each month's selection is a
+    vectorized sum over the trailing window, and one copy-price pass serves every rule.
+    """
+    pos = skill.positions(t)[["proxyWallet", "condition_id", "ts", "cost", "pnl", "var"]]
     months = pd.date_range(start, end, freq="MS", tz="UTC")
+    rng = np.random.default_rng(17)
     out = []
     for m0, m1 in zip(months[:-1], months[1:]):
         a, b = m0.timestamp(), m1.timestamp()
-        hist = t[(t.timestamp >= a - lookback_days * 86400) & (t.timestamp < a)]
+        hist = pos[(pos.ts >= a - lookback_days * 86400) & (pos.ts < a)]
         nxt = t[(t.timestamp >= a) & (t.timestamp < b)]
         if hist.empty or nxt.empty:
             continue
-        s = skill.wallet_stats(skill.positions(hist))
+        s = hist.groupby("proxyWallet", observed=True).agg(markets=("cost", "size"), staked=("cost", "sum"),
+                                                           pnl=("pnl", "sum"), var=("var", "sum"))
+        s["z"] = s.pnl / np.sqrt(s["var"].clip(lower=1e-9))
         act = s[s.markets >= MIN_MKTS]
-        if rule == "z":
-            ws = act.nlargest(TOP_K, "z").index
-        elif rule == "whales":
-            ws = s.nlargest(TOP_K, "staked").index
-        else:
-            ws = act.sample(min(TOP_K, len(act)), random_state=int(a) % 2**31).index
-        rows = nxt[nxt.proxyWallet.isin(ws)]
-        if rows.empty:
+        picks = {"z": act.nlargest(TOP_K, "z").index, "whales": s.nlargest(TOP_K, "staked").index,
+                 "random": act.index[rng.choice(len(act), size=min(TOP_K, len(act)), replace=False)]
+                 if len(act) else act.index}
+        chosen = {r: nxt[nxt.proxyWallet.isin(picks[r])] for r in rules}
+        chosen = {r: (x if len(x) <= max_rows else
+                      x[x.event_slug.isin(x.event_slug.drop_duplicates().sample(
+                          frac=max_rows / len(x), random_state=int(a) % 2**31))]) for r, x in chosen.items()}
+        allrows = pd.concat([x.assign(_rule=r) for r, x in chosen.items() if len(x)])
+        if allrows.empty:
             continue
-        cp = skill.copy_prices(nxt, rows, delays=tuple(delays))
-        for d in delays:
-            r = skill.copy_returns(cp, d)
-            out.append({"month": m0.strftime("%Y-%m"), "rule": rule, "delay": d, "trades": len(r),
-                        "pnl_per_$1": float((r.copy_roi * r.w).sum()), "staked": float(r.w.sum()),
-                        "in_play_share": float(r.in_play.mean())})
-    df = pd.DataFrame(out)
-    return df
+        cp = skill.copy_prices(nxt, allrows, delays=tuple(delays))
+        for r in rules:
+            part = cp[cp._rule == r]
+            for d in delays:
+                rr = skill.copy_returns(part, d)
+                if rr.empty:
+                    continue
+                out.append({"month": m0.strftime("%Y-%m"), "rule": r, "delay": d, "trades": len(rr),
+                            "pnl_per_$1": float((rr.copy_roi * rr.w).sum()), "staked": float(rr.w.sum()),
+                            "in_play_share": float(rr.in_play.mean())})
+    return pd.DataFrame(out)

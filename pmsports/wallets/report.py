@@ -63,12 +63,14 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     log.info("big-trade signal")
     big = study.big_trade_signal(t2)
     log.info("walk-forward")
-    wf = []
-    for rule in ("z", "whales", "random"):
-        wf.append(study.walk_forward(t, walk_start, walk_end, rule=rule, delays=(0, 1, 5, 30)).assign(scope="all"))
-    pre = t[~t.in_play]
-    for rule in ("z", "random"):
-        wf.append(study.walk_forward(pre, walk_start, walk_end, rule=rule, delays=(0, 60, 300)).assign(scope="pregame"))
+    wf = [study.walk_forward(t, walk_start, walk_end, delays=(0, 1, 5, 30)).assign(scope="all"),
+          study.walk_forward(t[~t.in_play], walk_start, walk_end, rules=("z", "random"),
+                             delays=(0, 60, 300)).assign(scope="pregame")]
+    for fam in ("soccer", "tennis", "basketball", "baseball", "esports"):
+        tf = t[t.family == fam]
+        if len(tf) > 100_000:
+            wf.append(study.walk_forward(tf, walk_start, walk_end, rules=("z", "random"),
+                                         delays=(0, 5, 30)).assign(scope=fam))
     wf = pd.concat(wf, ignore_index=True)
     wfa = wf.groupby(["scope", "rule", "delay"]).apply(lambda x: pd.Series({
         "months": len(x), "trades": x.trades.sum(), "copy_roi": x["pnl_per_$1"].sum() / x.staked.sum(),
@@ -119,4 +121,19 @@ def _render(t, fams, rules, decs, big, wfa, lb, split) -> str:
           "Copy every taker trade >= $X. `price_move_5min` = how far the side's price moved the leader's "
           "way within 5 minutes (informed money moves prices; ~0 means no information).", "",
           _md(big[[c for c in bc if c in big.columns]], ".4f"), ""]
+    prof_f = OUT / "leaderboard_onchain_2025.parquet"
+    if prof_f.exists():
+        lbi = lb.assign(rank_i=lb["rank"].astype(int))
+        top = pd.concat([lbi[lbi.list == "PNL"].nsmallest(100, "rank_i"), lbi[lbi.list == "VOL"].nsmallest(100, "rank_i")])
+        m = top.merge(pd.read_parquet(prof_f), left_on="proxyWallet", right_index=True, how="left")
+        m["margin"] = m.pnl / m.vol
+        m["kind"] = pd.cut(m.taker_share, [-.01, .25, .75, 1.01],
+                           labels=["mostly maker (MM-like)", "mixed", "mostly taker (directional)"])
+        m["kind"] = m.kind.cat.add_categories("no 2025 on-chain activity").fillna("no 2025 on-chain activity")
+        g = m.groupby(["list", "kind"], observed=True).agg(wallets=("pnl", "size"), median_alltime_pnl=("pnl", "median"),
+                                                          median_margin_pnl_over_vol=("margin", "median")).reset_index()
+        L += ["## 5. Who is on the leaderboard? (on-chain, 2025)", "",
+              "Top 100 all-time sports wallets by P&L and by volume, classified by the share of their 2025 "
+              "on-chain volume traded as taker (CryptoHouse OrderFilled events). Makers earn the spread and "
+              "rebates; their edge cannot be copied by a taker.", "", _md(g, ".4f"), ""]
     return "\n".join(L)
