@@ -17,7 +17,7 @@ from requests.adapters import HTTPAdapter
 HOST_RPS = {
     "gamma-api.polymarket.com": 8.0,
     "clob.polymarket.com": 10.0,
-    "data-api.polymarket.com": 8.0,
+    "data-api.polymarket.com": 15.0,
     "statsapi.mlb.com": 8.0,
 }
 DEFAULT_RPS = 5.0

@@ -8,6 +8,9 @@
   audit        data coverage / quality summary
   record       live capture: order books + Polymarket score feed + MLB linescore
   live-latency per-scoring-play latency from a recorded day (ms clocks)
+  universe     every resolved sports game market (all leagues) -> data/wallets/universe.parquet
+  tapes        wallet-attributed taker fills for sports moneylines (>= --min-volume)
+  wallets-report  copy-the-sharps study -> reports/WALLETS.md
 """
 from __future__ import annotations
 
@@ -38,6 +41,11 @@ def main() -> None:
     rc.add_argument("--window", type=float, default=4.0, help="subscribe to games starting within N hours")
     ll = sub.add_parser("live-latency")
     ll.add_argument("--day", required=True, help="UTC date folder under data/live/")
+    sub.add_parser("universe")
+    tp = sub.add_parser("tapes")
+    tp.add_argument("--min-volume", type=float, default=50000)
+    tp.add_argument("--workers", type=int, default=12)
+    sub.add_parser("wallets-report")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -71,6 +79,18 @@ def main() -> None:
         else:
             print(df.round(2).to_string(index=False))
             print(df[["book_t50", "sports_t", "mlb_t", "spread"]].describe().round(2).to_string())
+    elif a.cmd == "universe":
+        from .wallets.universe import build_universe
+        build_universe()
+    elif a.cmd == "tapes":
+        import pandas as pd
+        from .wallets.tapes import fetch_tapes, select_markets
+        from .wallets.universe import OUT
+        u = pd.read_parquet(OUT / "universe.parquet")
+        fetch_tapes(select_markets(u, min_volume=a.min_volume).sample(frac=1, random_state=0), workers=a.workers)
+    elif a.cmd == "wallets-report":
+        from .wallets.report import run
+        run()
 
 
 if __name__ == "__main__":

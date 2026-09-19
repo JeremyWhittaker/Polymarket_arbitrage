@@ -76,24 +76,31 @@ def load_trades(u: pd.DataFrame, cids=None, cols=("condition_id", "timestamp", "
     A taker SELL of outcome k at p is economically a purchase of the other outcome at 1-p
     (binary markets), so every fill becomes: wallet bought `side_idx` at `q`, won `y`.
     """
-    files = sorted(TAPES.glob("*.parquet"))
+    import pyarrow.dataset as ds
+    files = sorted(str(f) for f in TAPES.glob("*.parquet"))
     if cids is not None:
         cids = set(cids)
-        files = [f for f in files if f.stem in cids]
-    parts = []
-    for f in files:
-        t = pd.read_parquet(f, columns=list(cols))
-        if len(t):
-            parts.append(t)
-    t = pd.concat(parts, ignore_index=True)
+        files = [f for f in files if f.rsplit("/", 1)[-1][:-8] in cids]
+    # dictionary-encode wallet/market ids: tens of millions of fills stay a few hundred MB
+    tbl = ds.dataset(files, format="parquet").to_table(columns=list(cols))
+    t = tbl.to_pandas(strings_to_categorical=True)
+    t = t[t["size"] > 0]
     t["side_idx"] = np.where(t.side == "BUY", t.outcomeIndex, 1 - t.outcomeIndex).astype("int8")
     t["q"] = np.where(t.side == "BUY", t.price, 1 - t.price).astype("float32")
     t = t.drop(columns=["side", "outcomeIndex", "price"])
-    pay = u[["condition_id", "outcome_idx", "payout"]].rename(columns={"outcome_idx": "side_idx"})
-    pay["side_idx"] = pay.side_idx.astype("int8")
-    meta = u.drop_duplicates("condition_id")[["condition_id", "family", "league", "market_type",
-                                               "game_start_ts", "event_slug", "fee_rate"]]
-    t = t.merge(pay, on=["condition_id", "side_idx"], how="inner").merge(meta, on="condition_id", how="left")
+    # outcome + market metadata via lookups on the categorical codes (no string merge)
+    cats = t.condition_id.cat.categories
+    codes = t.condition_id.cat.codes.to_numpy()
+    pay = u[u.condition_id.isin(cats)].pivot_table(index="condition_id", columns="outcome_idx",
+                                                   values="payout", aggfunc="first").reindex(cats)
+    lut = pay.reindex(columns=[0, 1]).to_numpy(dtype="float32")
+    t["payout"] = lut[codes, t.side_idx.to_numpy()]
+    meta = u.drop_duplicates("condition_id").set_index("condition_id").reindex(cats)
+    for c in ("family", "league", "market_type", "event_slug"):
+        t[c] = pd.Series(meta[c].to_numpy()[codes], index=t.index).astype("category")
+    for c in ("game_start_ts", "fee_rate"):
+        t[c] = meta[c].to_numpy(dtype="float64")[codes]
+    t = t[~np.isnan(t.payout.to_numpy())]
     t["y"] = t.payout.astype("float32")
     t["size"] = t["size"].astype("float32")
     t["in_play"] = t.timestamp >= t.game_start_ts
