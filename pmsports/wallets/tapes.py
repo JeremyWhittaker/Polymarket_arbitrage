@@ -122,13 +122,11 @@ def load_trades(u: pd.DataFrame, cids=None) -> pd.DataFrame:
     lut = pay.reindex(columns=[0, 1]).to_numpy(dtype="float32")
     t["y"] = lut[codes, t.side_idx.to_numpy()]
     meta = u.drop_duplicates("condition_id").set_index("condition_id").reindex(cats)
-    for c in ("family", "league", "market_type", "event_slug"):
+    for c in ("family", "event_slug"):
         t[c] = pd.Categorical.from_codes(*_codes(meta[c].to_numpy(), codes))
-    for c in ("game_start_ts", "fee_rate"):
-        t[c] = meta[c].to_numpy(dtype="float64")[codes]
-    t = t[~np.isnan(t.y.to_numpy())]
-    t["in_play"] = t.timestamp >= t.game_start_ts
-    return t
+    t["fee_rate"] = meta["fee_rate"].to_numpy(dtype="float32")[codes]
+    t["in_play"] = t.timestamp.to_numpy() >= meta["game_start_ts"].to_numpy(dtype="float64")[codes]
+    return t[~np.isnan(t.y.to_numpy())]
 
 
 def _codes(per_market: np.ndarray, market_codes: np.ndarray):

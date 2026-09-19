@@ -24,34 +24,51 @@ from ..polymarket import taker_fee
 # ----------------------------------------------------------------------------- positions / stats
 
 def positions(t: pd.DataFrame) -> pd.DataFrame:
-    """Per (wallet, market) exposure, P&L and luck variance (lean: grouped on integer codes)."""
+    """Per (wallet, market) exposure, P&L and luck variance.
+
+    numpy sort + reduceat on a combined integer key: memory stays ~a few arrays of len(t)
+    (a pandas groupby over a wide temp frame OOMs at ~50M fills).
+    """
+    w = t.proxyWallet.cat.codes.to_numpy().astype(np.int64)
+    m = t.condition_id.cat.codes.to_numpy().astype(np.int64)
+    nm = int(m.max()) + 1 if len(m) else 1
+    order = np.argsort(w * nm + m, kind="stable")
+    key = (w * nm + m)[order]
+    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
+    del w, m
+
+    def red(x):
+        return np.add.reduceat(np.asarray(x)[order], starts) if len(starts) else np.array([])
+
     size = t["size"].to_numpy(np.float64)
     q = t.q.to_numpy(np.float64)
     side0 = t.side_idx.to_numpy() == 0
-    k = pd.DataFrame({
-        "w": t.proxyWallet.cat.codes.to_numpy(), "m": t.condition_id.cat.codes.to_numpy(),
-        "cost": size * q, "pnl": size * (t.y.to_numpy(np.float64) - q),
-        "fee": taker_fee(size, q, np.nan_to_num(t.fee_rate.to_numpy(np.float64))),
-        "a": np.where(side0, size, 0.0), "b": np.where(side0, 0.0, size),
-        "p0w": size * np.where(side0, q, 1 - q), "shares": size,
-        "ts": t.timestamp.to_numpy(), "in_play": t.in_play.to_numpy(np.float32)})
-    g = k.groupby(["w", "m"], sort=False)
-    pos = g.agg(cost=("cost", "sum"), pnl=("pnl", "sum"), fee=("fee", "sum"), a=("a", "sum"), b=("b", "sum"),
-                p0w=("p0w", "sum"), shares=("shares", "sum"), n=("cost", "size"), ts=("ts", "min"),
-                in_play=("in_play", "mean")).reset_index()
-    del k
+    out = {"cost": red(size * q), "pnl": red(size * (t.y.to_numpy(np.float64) - q)),
+           "fee": red(taker_fee(size, q, t.fee_rate.to_numpy(np.float64))),
+           "a": red(np.where(side0, size, 0.0)), "b": red(np.where(side0, 0.0, size)),
+           "p0w": red(size * np.where(side0, q, 1 - q)), "shares": red(size),
+           "in_play": red(t.in_play.to_numpy(np.float64))}
+    n = np.diff(np.r_[starts, len(key)])
+    out["in_play"] = out["in_play"] / n
+    out["n"] = n
+    out["ts"] = np.minimum.reduceat(t.timestamp.to_numpy()[order], starts) if len(starts) else np.array([])
+    del size, q, side0, order
+    pos = pd.DataFrame(out)
+    k0 = key[starts]
+    wcode, mcode = (k0 // nm).astype(np.int32), (k0 % nm).astype(np.int32)
     p0 = (pos.p0w / pos.shares).clip(0.001, 0.999)
     pos["var"] = (pos.a - pos.b) ** 2 * p0 * (1 - p0)
     pos["pnl_net"] = pos.pnl - pos.fee
-    wcat, mcat = t.proxyWallet.cat.categories, t.condition_id.cat.categories
-    fam = t.groupby("condition_id", observed=True).family.first()
-    ev = t.groupby("condition_id", observed=True).event_slug.first()
-    pos["proxyWallet"] = pd.Categorical.from_codes(pos.w.to_numpy(), categories=wcat)
-    pos["condition_id"] = pd.Categorical.from_codes(pos.m.to_numpy(), categories=mcat)
-    mids = pos.condition_id.astype(object)
-    pos["family"] = mids.map(fam).astype("category")
-    pos["event"] = mids.map(ev).astype("category")
-    return pos.drop(columns=["p0w", "w", "m"])
+    pos["proxyWallet"] = pd.Categorical.from_codes(wcode, categories=t.proxyWallet.cat.categories)
+    pos["condition_id"] = pd.Categorical.from_codes(mcode, categories=t.condition_id.cat.categories)
+    # per-market attributes via first row of each market code
+    mc = t.condition_id.cat.codes.to_numpy()
+    first = np.full(len(t.condition_id.cat.categories), -1, dtype=np.int64)
+    first[mc[::-1]] = np.arange(len(mc))[::-1]
+    for c, src in (("family", "family"), ("event", "event_slug")):
+        codes = t[src].cat.codes.to_numpy()[first[mcode]]
+        pos[c] = pd.Categorical.from_codes(codes, categories=t[src].cat.categories)
+    return pos.drop(columns=["p0w"])
 
 
 def wallet_stats(pos: pd.DataFrame) -> pd.DataFrame:
