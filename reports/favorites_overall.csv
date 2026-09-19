@@ -1,0 +1,2 @@
+scope,games,avg_fav_price,fav_win_rate,gap_win_minus_price,roi_no_fee_no_slip,roi_no_fee_ci,roi_actual_fee_1c,roi_5pct_fee_1c,roi_5pct_ci,pnl_$100_per_game_actual_fee,fav_roi_at_ask_actual_fee,fav_at_ask_ci,underdog_roi_at_ask_actual_fee,underdog_at_ask_ci
+ALL,16242,0.6272833720074374,0.6183659647826623,-0.008917407224775187,-0.015531580607798997,-0.028..-0.003,-0.03810255812870844,-0.048728682804779856,-0.060..-0.037,-61886.174912648254,-0.028085222331833092,-0.041..-0.016,-0.007476922802025019,-0.034..+0.018

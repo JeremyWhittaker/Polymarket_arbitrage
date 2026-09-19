@@ -11,6 +11,7 @@
   universe     every resolved sports game market (all leagues) -> data/wallets/universe.parquet
   tapes        wallet-attributed taker fills for sports moneylines (>= --min-volume)
   wallets-report  copy-the-sharps study -> reports/WALLETS.md
+  favorites    bet every pregame favorite, hold to the end (all sports) -> reports/FAVORITES.md
 """
 from __future__ import annotations
 
@@ -46,6 +47,7 @@ def main() -> None:
     tp.add_argument("--min-volume", type=float, default=50000)
     tp.add_argument("--workers", type=int, default=12)
     sub.add_parser("wallets-report")
+    sub.add_parser("favorites")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -90,6 +92,9 @@ def main() -> None:
         fetch_tapes(select_markets(u, min_volume=a.min_volume).sample(frac=1, random_state=0), workers=a.workers)
     elif a.cmd == "wallets-report":
         from .wallets.report import run
+        run()
+    elif a.cmd == "favorites":
+        from .analysis.favorites import run
         run()
 
 

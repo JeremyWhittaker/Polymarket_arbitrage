@@ -44,6 +44,18 @@ What could still work: being the **maker** rather than the taker (no fee, plus a
 rebate), or a data feed faster than Polymarket's own (~27s). The second one is what
 courtsiders and official-data feeds sell. `record` + `live-latency` measure both.
 
+## Bet every pregame favorite, hold to the end (all sports) — [`reports/FAVORITES.md`](reports/FAVORITES.md)
+
+This covers 16,242 games with at least $25k traded *before* the start (Jan 2025 to Sep 2026).
+Favorites won **61.8%** of games at an average price of **62.7%**, which is **-1.6% per $1
+before costs** and **-3.8% after the fees actually charged plus 1c**. At $100 per game that is
+**-$61,900**. No sport, season or favorite-price bucket is reliably positive after costs.
+The mirror bet (every underdog) is about -0.7%.
+
+Trap: selecting games on *total* volume (>= $50k, which includes in-play trading) makes
+underdogs look +3% to +9% profitable. Upsets draw more in-play volume, so thin markets clear
+the cut more often when the dog wins. Selecting on pregame volume only removes the effect.
+
 ## Copy-the-sharps study (all sports) — [`reports/WALLETS.md`](reports/WALLETS.md)
 
 Data: 53.8M wallet-attributed taker fills in 38,364 resolved sports moneyline markets with
@@ -83,6 +95,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pmsports universe       # every resolved sports game market, all leagues (~25 min)
 .venv/bin/python -m pmsports tapes          # wallet-attributed fills, moneylines >= $50k (~3 h, resumable)
 .venv/bin/python -m pmsports wallets-report # copy-the-sharps study -> reports/WALLETS.md (~40 min, 14 GB cap)
+.venv/bin/python -m pmsports favorites      # bet every pregame favorite, all sports -> reports/FAVORITES.md (~2 min)
 .venv/bin/python -m pytest -q tests
 ```
 
@@ -131,6 +144,7 @@ pmsports/
     hypotheses.py  H1 calibration, H2 state tables, H3 out-of-sample backtest, H4 latency
     report.py      renders reports/REPORT.md + CSV + charts
     live.py        per-scoring-play latency from a recorded day
+    favorites.py   pregame-favorite (and underdog) hold-to-resolution backtest, all sports
   wallets/
     universe.py    all resolved sports game markets (Gamma tag 100639), sport family, payouts
     tapes.py       per-market taker tapes; streaming loader (54M fills in ~2 GB)
