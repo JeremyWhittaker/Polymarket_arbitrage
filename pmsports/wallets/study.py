@@ -61,7 +61,9 @@ def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache:
         if len(rows) > MAX_COPY_ROWS:   # sample whole events so the clustered CI stays honest
             ev = rows.event_slug.drop_duplicates().sample(frac=MAX_COPY_ROWS / len(rows), random_state=5)
             rows = rows[rows.event_slug.isin(ev)]
-        rows_cache[key] = skill.copy_prices(t2, rows, delays=DELAYS)
+        if "_groups" not in rows_cache:
+            rows_cache["_groups"] = skill.build_groups(t2)
+        rows_cache[key] = skill.copy_prices(t2, rows, delays=DELAYS, groups=rows_cache["_groups"])
     rows = rows_cache[key]
     for d in DELAYS:
         c = skill.summarize_copy(skill.copy_returns(rows, d, stake="equal"))
@@ -135,12 +137,13 @@ def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str 
 def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delays=(5, 30, 60)) -> pd.DataFrame:
     """Copy every taker trade >= $X regardless of who placed it ("follow the whale money")."""
     usd = t2["size"] * t2.q
+    gb = skill.build_groups(t2)
     rows = []
     for x in thresholds:
         sub = t2[usd >= x]
         if sub.empty:
             continue
-        cp = skill.copy_prices(t2, sub, delays=(0,) + tuple(delays))
+        cp = skill.copy_prices(t2, sub, delays=(0,) + tuple(delays), groups=gb)
         for phase, m in [("all", slice(None)), ("pregame", ~cp.in_play), ("in_play", cp.in_play)]:
             part = cp[m] if not isinstance(m, slice) else cp
             rec = {"min_usd": x, "phase": phase, "trades": len(part),
@@ -151,7 +154,7 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
                 rec[f"copy_d{d}"] = c["roi"]
                 rec[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
             # information: does the side's price move the leader's way within 5 minutes?
-            part5 = skill.copy_prices(t2, part.head(20000), delays=(300,))
+            part5 = skill.copy_prices(t2, part.head(20000), delays=(300,), groups=gb)
             rec["price_move_5min"] = float((part5.q_d300 - part5.q).mean())
             rows.append(rec)
     return pd.DataFrame(rows)

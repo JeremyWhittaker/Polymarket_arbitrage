@@ -69,39 +69,69 @@ def fetch_tapes(markets: pd.DataFrame, workers: int = 6) -> None:
     log.info("tapes done: %d ok, %d failed, %d rows", done, failed, rows)
 
 
-def load_trades(u: pd.DataFrame, cids=None, cols=("condition_id", "timestamp", "proxyWallet", "side",
-                                                  "outcomeIndex", "price", "size")) -> pd.DataFrame:
+def load_trades(u: pd.DataFrame, cids=None) -> pd.DataFrame:
     """All tapes as copyable 'bought side X at q' rows joined to outcomes.
 
     A taker SELL of outcome k at p is economically a purchase of the other outcome at 1-p
     (binary markets), so every fill becomes: wallet bought `side_idx` at `q`, won `y`.
+
+    Streams file by file and maps wallet addresses to global integer codes as it goes, so
+    ~50M fills cost ~1.5 GB (materializing the id strings would need >12 GB).
     """
-    import pyarrow.dataset as ds
-    files = sorted(str(f) for f in TAPES.glob("*.parquet"))
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+    files = sorted(TAPES.glob("*.parquet"))
     if cids is not None:
         cids = set(cids)
-        files = [f for f in files if f.rsplit("/", 1)[-1][:-8] in cids]
-    # dictionary-encode wallet/market ids: tens of millions of fills stay a few hundred MB
-    tbl = ds.dataset(files, format="parquet").to_table(columns=list(cols))
-    t = tbl.to_pandas(strings_to_categorical=True)
+        files = [f for f in files if f.stem in cids]
+    wid: dict[str, int] = {}
+    cols = {k: [] for k in ("m", "w", "ts", "size", "side_idx", "q")}
+    mkts: list[str] = []
+    for f in files:
+        tb = pq.read_table(f, columns=["timestamp", "proxyWallet", "side", "outcomeIndex", "price", "size"])
+        if tb.num_rows == 0:
+            continue
+        de = pc.dictionary_encode(tb["proxyWallet"]).combine_chunks()
+        gmap = np.fromiter((wid.setdefault(w, len(wid)) for w in de.dictionary.to_pylist()), dtype=np.int32)
+        buy = pc.equal(tb["side"], "BUY").to_numpy(zero_copy_only=False)
+        oi = tb["outcomeIndex"].to_numpy(zero_copy_only=False).astype(np.int8)
+        px = tb["price"].to_numpy(zero_copy_only=False).astype(np.float32)
+        cols["m"].append(np.full(tb.num_rows, len(mkts), dtype=np.int32))
+        cols["w"].append(gmap[de.indices.to_numpy(zero_copy_only=False)])
+        cols["ts"].append(tb["timestamp"].to_numpy(zero_copy_only=False).astype(np.int64))
+        cols["size"].append(tb["size"].to_numpy(zero_copy_only=False).astype(np.float32))
+        cols["side_idx"].append(np.where(buy, oi, 1 - oi).astype(np.int8))
+        cols["q"].append(np.where(buy, px, 1 - px).astype(np.float32))
+        mkts.append(f.stem)
+    arr = {k: np.concatenate(v) if v else np.array([]) for k, v in cols.items()}
+    wallets = np.empty(len(wid), dtype=object)
+    for w, i in wid.items():
+        wallets[i] = w
+    t = pd.DataFrame({
+        "condition_id": pd.Categorical.from_codes(arr["m"], categories=pd.Index(mkts)),
+        "timestamp": arr["ts"],
+        "proxyWallet": pd.Categorical.from_codes(arr["w"], categories=pd.Index(wallets)),
+        "size": arr["size"], "side_idx": arr["side_idx"], "q": arr["q"]})
+    del arr, cols
     t = t[t["size"] > 0]
-    t["side_idx"] = np.where(t.side == "BUY", t.outcomeIndex, 1 - t.outcomeIndex).astype("int8")
-    t["q"] = np.where(t.side == "BUY", t.price, 1 - t.price).astype("float32")
-    t = t.drop(columns=["side", "outcomeIndex", "price"])
-    # outcome + market metadata via lookups on the categorical codes (no string merge)
+    # outcome + market metadata via lookups on the market codes (no string merge)
     cats = t.condition_id.cat.categories
     codes = t.condition_id.cat.codes.to_numpy()
     pay = u[u.condition_id.isin(cats)].pivot_table(index="condition_id", columns="outcome_idx",
                                                    values="payout", aggfunc="first").reindex(cats)
     lut = pay.reindex(columns=[0, 1]).to_numpy(dtype="float32")
-    t["payout"] = lut[codes, t.side_idx.to_numpy()]
+    t["y"] = lut[codes, t.side_idx.to_numpy()]
     meta = u.drop_duplicates("condition_id").set_index("condition_id").reindex(cats)
     for c in ("family", "league", "market_type", "event_slug"):
-        t[c] = pd.Series(meta[c].to_numpy()[codes], index=t.index).astype("category")
+        t[c] = pd.Categorical.from_codes(*_codes(meta[c].to_numpy(), codes))
     for c in ("game_start_ts", "fee_rate"):
         t[c] = meta[c].to_numpy(dtype="float64")[codes]
-    t = t[~np.isnan(t.payout.to_numpy())]
-    t["y"] = t.payout.astype("float32")
-    t["size"] = t["size"].astype("float32")
+    t = t[~np.isnan(t.y.to_numpy())]
     t["in_play"] = t.timestamp >= t.game_start_ts
-    return t.drop(columns=["payout"])
+    return t
+
+
+def _codes(per_market: np.ndarray, market_codes: np.ndarray):
+    """Categorical (codes, categories) for a per-market attribute broadcast to rows."""
+    vals, inv = np.unique(pd.Series(per_market).fillna("").astype(str).to_numpy(), return_inverse=True)
+    return inv[market_codes].astype(np.int32), pd.Index(vals)
