@@ -12,6 +12,7 @@
   tapes        wallet-attributed taker fills for sports moneylines (>= --min-volume)
   wallets-report  copy-the-sharps study -> reports/WALLETS.md
   favorites    bet every pregame favorite, hold to the end (all sports) -> reports/FAVORITES.md
+  thresholds   pregame price thresholds by sport + MLB "leader below historical win rate" rule
 """
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ def main() -> None:
     tp.add_argument("--workers", type=int, default=12)
     sub.add_parser("wallets-report")
     sub.add_parser("favorites")
+    sub.add_parser("thresholds")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -95,6 +97,9 @@ def main() -> None:
         run()
     elif a.cmd == "favorites":
         from .analysis.favorites import run
+        run()
+    elif a.cmd == "thresholds":
+        from .analysis.thresholds import run
         run()
 
 

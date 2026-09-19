@@ -56,6 +56,19 @@ Trap: selecting games on *total* volume (>= $50k, which includes in-play trading
 underdogs look +3% to +9% profitable. Upsets draw more in-play volume, so thin markets clear
 the cut more often when the dog wins. Selecting on pregame volume only removes the effect.
 
+## Threshold strategies — [`reports/THRESHOLDS.md`](reports/THRESHOLDS.md)
+
+- **Bet any team priced >= T pregame (T = 50c..90c), per sport:** no threshold is profitable
+  after fees. Before costs, favorites >= 65c break even (-0.2%) and 50-65c favorites are
+  overpriced by 1-2 points. Only 1 of 72 sport x threshold cells has a CI above zero
+  (basketball >= 90c, 126 games), and about 2 would by chance.
+- **MLB: buy the leader when its price is X points below the historical win rate for that
+  inning/lead:** discounted leaders are nearly always the weaker team (78-98% were pregame
+  underdogs), and they win at about their price, not at the historical rate. First signal
+  per game: **+6% in 2025** (fee-free, thin market; CI +1% to +10.5%) but **~0% in 2026**
+  (+2-4% before costs, not significant, eaten by fees). With a fair value that knows the
+  pregame odds, there is no edge on either side in 2026.
+
 ## Copy-the-sharps study (all sports) — [`reports/WALLETS.md`](reports/WALLETS.md)
 
 Data: 53.8M wallet-attributed taker fills in 38,364 resolved sports moneyline markets with
@@ -96,6 +109,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pmsports tapes          # wallet-attributed fills, moneylines >= $50k (~3 h, resumable)
 .venv/bin/python -m pmsports wallets-report # copy-the-sharps study -> reports/WALLETS.md (~40 min, 14 GB cap)
 .venv/bin/python -m pmsports favorites      # bet every pregame favorite, all sports -> reports/FAVORITES.md (~2 min)
+.venv/bin/python -m pmsports thresholds     # price thresholds by sport + MLB inning-discount rule -> reports/THRESHOLDS.md
 .venv/bin/python -m pytest -q tests
 ```
 
@@ -145,6 +159,7 @@ pmsports/
     report.py      renders reports/REPORT.md + CSV + charts
     live.py        per-scoring-play latency from a recorded day
     favorites.py   pregame-favorite (and underdog) hold-to-resolution backtest, all sports
+    thresholds.py  price-threshold grid by sport; MLB leader-below-historical-rate rule
   wallets/
     universe.py    all resolved sports game markets (Gamma tag 100639), sport family, payouts
     tapes.py       per-market taker tapes; streaming loader (54M fills in ~2 GB)
