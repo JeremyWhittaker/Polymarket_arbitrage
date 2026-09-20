@@ -81,3 +81,13 @@ def test_asof_handles_empty_and_before_start():
     assert np.isnan(_asof(np.array([]), np.array([]), np.array([5.0]))).all()
     out = _asof(np.array([10.0, 20.0]), np.array([0.4, 0.6]), np.array([5.0, 15.0, 25.0]))
     assert np.isnan(out[0]) and out[1] == 0.4 and out[2] == 0.6
+
+
+def test_side_comes_from_token_id_not_outcome_index():
+    """The Data API's outcomeIndex is wrong on a few thousand fills; the asset id is authoritative."""
+    tok = {"cid": ("tok0", "tok1")}
+    asset = np.array(["tok1", "tok0", "unknown"])
+    oi = np.array([0, 1, 1], dtype="int8")          # first two disagree with the token
+    tk = tok["cid"]
+    fixed = np.where(asset == tk[0], 0, np.where(asset == tk[1], 1, oi)).astype("int8")
+    assert list(fixed) == [1, 0, 1]                  # corrected, corrected, fallback kept

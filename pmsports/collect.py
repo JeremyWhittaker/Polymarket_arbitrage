@@ -167,8 +167,10 @@ def _fetch_one(g, d: Path, what: set[str]) -> dict:
         t = pd.DataFrame(pm.trades(g.condition_id, int(start - 3 * 3600), int(end)),
                          columns=list(pm.TRADE_FIELDS))
         t.insert(0, "game_pk", pk)
-        # implied probability of the HOME team from every fill, whichever token traded
-        t["home_p"] = t.price.where(t.outcomeIndex == g.home_outcome_idx, 1 - t.price)
+        # implied probability of the HOME team from every fill, whichever token traded.
+        # Use the asset (token) id: the Data API's outcomeIndex is wrong on a few fills.
+        is_home = t.asset.eq(g.home_token) | (~t.asset.eq(g.away_token) & t.outcomeIndex.eq(g.home_outcome_idx))
+        t["home_p"] = t.price.where(is_home, 1 - t.price)
         _write(t, d / "trades" / f"{pk}.parquet")
         stats["trades"] = len(t)
     return stats

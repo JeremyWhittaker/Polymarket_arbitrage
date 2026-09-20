@@ -87,14 +87,22 @@ def load_trades(u: pd.DataFrame, cids=None) -> pd.DataFrame:
     wid: dict[str, int] = {}
     cols = {k: [] for k in ("m", "w", "ts", "size", "side_idx", "q")}
     mkts: list[str] = []
+    # token id -> outcome index per market: the Data API's `outcomeIndex` is wrong on a few
+    # thousand fills (an API glitch, mostly tennis on 2026-05-13/14); the asset id never is.
+    toks = u.pivot_table(index="condition_id", columns="outcome_idx", values="token_id", aggfunc="first")
+    tok_of = {c: (a, b) for c, a, b in zip(toks.index, toks[0], toks[1])}
     for f in files:
-        tb = pq.read_table(f, columns=["timestamp", "proxyWallet", "side", "outcomeIndex", "price", "size"])
+        tb = pq.read_table(f, columns=["timestamp", "proxyWallet", "side", "outcomeIndex", "price", "size", "asset"])
         if tb.num_rows == 0:
             continue
         de = pc.dictionary_encode(tb["proxyWallet"]).combine_chunks()
         gmap = np.fromiter((wid.setdefault(w, len(wid)) for w in de.dictionary.to_pylist()), dtype=np.int32)
         buy = pc.equal(tb["side"], "BUY").to_numpy(zero_copy_only=False)
         oi = tb["outcomeIndex"].to_numpy(zero_copy_only=False).astype(np.int8)
+        tk = tok_of.get(f.stem)
+        if tk is not None:
+            asset = tb["asset"].to_numpy(zero_copy_only=False)
+            oi = np.where(asset == tk[0], 0, np.where(asset == tk[1], 1, oi)).astype(np.int8)
         px = tb["price"].to_numpy(zero_copy_only=False).astype(np.float32)
         cols["m"].append(np.full(tb.num_rows, len(mkts), dtype=np.int32))
         cols["w"].append(gmap[de.indices.to_numpy(zero_copy_only=False)])

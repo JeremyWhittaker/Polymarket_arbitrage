@@ -30,20 +30,23 @@ REPORTS = Path(__file__).resolve().parents[2] / "reports"
 PREGAME_MIN_USD = 25_000
 
 
-def _pregame_p0(path: Path, start: float) -> tuple[float, float, float, int, float]:
+def _pregame_p0(path: Path, start: float, tokens=None) -> tuple[float, float, float, int, float]:
     """Pregame mid of outcome 0, plus the executable asks for outcome 0 and outcome 1.
 
     Mid = median implied price over all fills. Ask for outcome k = median price paid by
     takers who *acquired* k (BUY k, or SELL the other side at p -> paid 1-p). Using the
     mid alone overstates the cheap side's value when takers mostly buy the favorite.
     """
-    tb = pq.read_table(path, columns=["timestamp", "side", "outcomeIndex", "price", "size"]).to_pandas()
+    tb = pq.read_table(path, columns=["timestamp", "side", "outcomeIndex", "price", "size", "asset"]).to_pandas()
     if tb.empty:
         return np.nan, np.nan, np.nan, 0, 0.0
     usd = (tb.price * tb["size"]).to_numpy()
     pre_usd = float(usd[(tb.timestamp < start).to_numpy()].sum())
     buy = (tb.side == "BUY").to_numpy()
     oi = tb.outcomeIndex.to_numpy()
+    if tokens is not None:                      # token id is authoritative; outcomeIndex glitches
+        a = tb.asset.to_numpy()
+        oi = np.where(a == tokens[0], 0, np.where(a == tokens[1], 1, oi))
     px = tb.price.to_numpy()
     p0 = np.where(oi == 0, px, 1 - px)
     acq = np.where(buy, oi, 1 - oi)          # which outcome the taker ended up long
@@ -64,8 +67,11 @@ def pregame_prices(workers: int = 16) -> pd.DataFrame:
     have = {p.stem for p in TAPES.glob("*.parquet")}
     m = m[m.condition_id.isin(have) & m.game_start_ts.notna()]
     log.info("pregame prices for %d markets", len(m))
+    toks = u.pivot_table(index="condition_id", columns="outcome_idx", values="token_id", aggfunc="first")
+    tok_of = {c: (a, b) for c, a, b in zip(toks.index, toks[0], toks[1])}
     with ThreadPoolExecutor(workers) as ex:
-        res = list(ex.map(lambda r: _pregame_p0(TAPES / f"{r.condition_id}.parquet", r.game_start_ts),
+        res = list(ex.map(lambda r: _pregame_p0(TAPES / f"{r.condition_id}.parquet", r.game_start_ts,
+                                                tok_of.get(r.condition_id)),
                           m.itertuples(index=False)))
     m = m.assign(p0=[r[0] for r in res], ask0=[r[1] for r in res], ask1=[r[2] for r in res],
                  n_fills=[r[3] for r in res], pre_usd=[r[4] for r in res])
