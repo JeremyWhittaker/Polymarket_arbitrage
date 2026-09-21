@@ -1,0 +1,438 @@
+<title>Polymarket Trade Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f1;
+    --surface: #fbfbf9;
+    --surface-2: #eeeeea;
+    --line: #dcdcd5;
+    --line-strong: #c4c4bb;
+    --ink: #1c1d1a;
+    --ink-2: #55564f;
+    --ink-3: #7d7e75;
+    --accent: #9a6b16;
+    --accent-soft: #f0e3c9;
+    --good: #1c6b45;
+    --good-soft: #dceadf;
+    --bad: #a33328;
+    --bad-soft: #f2dedb;
+    --flat: #6b6c64;
+    --shadow: 0 1px 2px rgba(28, 29, 26, .06);
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --display: "Fraunces", Georgia, serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #16171a;
+      --surface: #1d1f22;
+      --surface-2: #26282c;
+      --line: #32353a;
+      --line-strong: #454950;
+      --ink: #eceef0;
+      --ink-2: #b2b6bb;
+      --ink-3: #868b91;
+      --accent: #d9a54a;
+      --accent-soft: #3a2f18;
+      --good: #4fbc86;
+      --good-soft: #173024;
+      --bad: #e0776a;
+      --bad-soft: #35201d;
+      --flat: #9aa0a6;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #16171a;
+    --surface: #1d1f22;
+    --surface-2: #26282c;
+    --line: #32353a;
+    --line-strong: #454950;
+    --ink: #eceef0;
+    --ink-2: #b2b6bb;
+    --ink-3: #868b91;
+    --accent: #d9a54a;
+    --accent-soft: #3a2f18;
+    --good: #4fbc86;
+    --good-soft: #173024;
+    --bad: #e0776a;
+    --bad-soft: #35201d;
+    --flat: #9aa0a6;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+
+  body { background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.5; }
+  * { box-sizing: border-box; }
+  h1, h2, h3 { font-family: var(--display); font-weight: 600; text-wrap: balance; margin: 0; letter-spacing: -.01em; }
+  a { color: var(--accent); }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  .masthead { border-bottom: 1px solid var(--line); background: var(--surface); }
+  .masthead-in { max-width: 1400px; margin: 0 auto; padding-block: 18px 16px; padding-inline: 20px;
+    display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline; justify-content: space-between; }
+  .masthead h1 { font-size: 24px; }
+  .masthead p { margin: 4px 0 0; color: var(--ink-2); font-size: 13px; max-width: 70ch; }
+  .stats-strip { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+  .stats-strip b { display: block; font-family: var(--mono); font-size: 16px; color: var(--ink); font-weight: 500; }
+
+  .shell { max-width: 1400px; margin: 0 auto; padding-inline: 20px; padding-block: 20px 56px;
+    display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 22px; align-items: start; }
+  @media (max-width: 900px) { .shell { grid-template-columns: minmax(0, 1fr); } }
+
+  .rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); display: flex; flex-direction: column; gap: 10px; }
+  @media (max-width: 900px) { .rail { position: static; } }
+  .rail input[type="search"] { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong);
+    border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
+  .rail-group { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+  .rail-group > h3 { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-3); padding: 9px 12px; border-bottom: 1px solid var(--line);
+    background: var(--surface-2); }
+  .rail-item { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; text-align: left;
+    padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit;
+    font: inherit; font-size: 13px; cursor: pointer; }
+  .rail-item:last-child { border-bottom: 0; }
+  .rail-item:hover { background: var(--surface-2); }
+  .rail-item[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .rail-item .sub { grid-column: 1 / -1; color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
+
+  .chip { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 999px; white-space: nowrap; align-self: center; }
+  .chip.dead { background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line-strong); }
+  .chip.promising { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+  .chip.disputed { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+  .chip.profitable { background: var(--good-soft); color: var(--good); border: 1px solid var(--good); }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+  .panel + .panel { margin-top: 18px; }
+  .panel-pad { padding: 18px 20px; }
+  .head-row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+  .head-row h2 { font-size: 22px; }
+  .eyebrow { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .lede { margin: 10px 0 0; font-size: 15px; color: var(--ink); max-width: 72ch; }
+  .muted { color: var(--ink-2); font-size: 13.5px; max-width: 78ch; }
+
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0;
+    border-top: 1px solid var(--line); }
+  .rules > div { padding: 14px 20px; border-right: 1px solid var(--line); }
+  .rules > div:last-child { border-right: 0; }
+  .rules dt { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent);
+    font-weight: 600; margin-bottom: 5px; }
+  .rules dd { margin: 0; font-size: 13px; color: var(--ink-2); }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
+    background: var(--line); border-top: 1px solid var(--line); }
+  .kpi { background: var(--surface); padding: 13px 20px; }
+  .kpi .k { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .kpi .v { font-family: var(--mono); font-size: 21px; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .kpi .ci { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .zero { color: var(--flat); }
+
+  .chart-wrap { padding: 16px 20px 10px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  canvas { width: 100%; height: 220px; display: block; margin-top: 8px; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--ink-2); flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line);
+    align-items: center; }
+  .controls label { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3);
+    font-weight: 600; margin-right: 2px; }
+  select, .controls input[type="search"] { padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px;
+    background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; background: var(--surface); color: var(--ink-2); font: inherit; font-size: 12.5px;
+    padding: 6px 11px; cursor: pointer; border-right: 1px solid var(--line-strong); }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th { text-align: left; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3);
+    font-weight: 600; padding: 9px 10px; border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+    background: var(--surface); position: sticky; top: 0; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  td.wrap { white-space: normal; min-width: 180px; }
+  tr.trade { cursor: pointer; }
+  tr.trade:hover td { background: var(--surface-2); }
+  tr.trade[aria-expanded="true"] td { background: var(--accent-soft); }
+  .r { text-align: right; }
+  .detail td { background: var(--surface-2); white-space: normal; }
+  .walk { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; padding: 4px 0 8px; }
+  .walk h4 { margin: 0 0 4px; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--accent);
+    font-family: var(--sans); font-weight: 600; }
+  .walk p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  .walk .big { font-family: var(--mono); font-size: 15px; color: var(--ink); }
+  .more { display: block; width: 100%; padding: 11px; border: 0; border-top: 1px solid var(--line);
+    background: var(--surface-2); color: var(--ink-2); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .more:hover { color: var(--ink); }
+
+  .notes { padding: 16px 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+  .notes h3 { font-size: 14px; margin-bottom: 6px; font-family: var(--sans); font-weight: 600; color: var(--ink); }
+  .notes ul { margin: 6px 0 0; padding-left: 18px; }
+  .notes li { margin-bottom: 4px; }
+  .paths { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-top: 10px; }
+  .loading { padding: 40px 20px; text-align: center; color: var(--ink-3); font-size: 13px; }
+  @media (prefers-reduced-motion: no-preference) { tr.trade, .rail-item { transition: background .12s ease; } }
+</style>
+
+<header class="masthead">
+  <div class="masthead-in">
+    <div>
+      <h1>Polymarket Trade Ledger</h1>
+      <p>Every strategy we tested on Polymarket sports markets, down to the individual bet: what it
+        claimed, how each trade was entered and exited, what it cost, and what it actually made.</p>
+    </div>
+    <div class="stats-strip" id="strip"></div>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="rail">
+    <input type="search" id="railSearch" placeholder="Filter strategies" aria-label="Filter strategies">
+    <div id="rail"></div>
+  </aside>
+  <main id="main"><div class="loading">Loading ledgers…</div></main>
+</div>
+
+<script>
+  window.PM = { index: [], cache: {}, receive: function (doc) { PM.cache[doc.slug] = doc; if (PM._onReceive) PM._onReceive(doc); } };
+</script>
+<script defer src="index.js"></script>
+<script defer>
+  (function () {
+    var state = { slug: null, period: "all", sport: "all", result: "all", q: "", limit: 100, open: null };
+    var el = function (id) { return document.getElementById(id); };
+    var fmtPct = function (v, d) { return (v == null || isNaN(v)) ? "–" : (v >= 0 ? "+" : "") + (v * 100).toFixed(d == null ? 1 : d) + "%"; };
+    var fmtUsd = function (v) { return (v == null || isNaN(v)) ? "–" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+    var fmtC = function (v) { return (v == null || isNaN(v)) ? "–" : (v * 100).toFixed(1) + "¢"; };
+    var sign = function (v) { return v > 0.0000001 ? "pos" : v < -0.0000001 ? "neg" : "zero"; };
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
+    var when = function (ts) { if (!ts) return "–"; var d = new Date(ts * 1000); return d.toISOString().replace("T", " ").slice(0, 16) + "Z"; };
+
+    function verdictClass(v) { return (v || "").toLowerCase().indexOf("profit") === 0 ? "profitable" : (v || "").toLowerCase().indexOf("promis") === 0 ? "promising" : (v || "").toLowerCase().indexOf("disput") === 0 ? "disputed" : "dead"; }
+
+    function buildRail() {
+      var q = state.q.toLowerCase(), groups = {}, order = [];
+      PM.index.forEach(function (d) {
+        if (q && (d.title + " " + d.sport + " " + d.hypothesis).toLowerCase().indexOf(q) < 0) return;
+        if (!groups[d.group]) { groups[d.group] = []; order.push(d.group); }
+        groups[d.group].push(d);
+      });
+      var html = order.map(function (g) {
+        return '<section class="rail-group"><h3>' + esc(g) + "</h3>" + groups[g].map(function (d) {
+          var h = (d.headline && (d.headline.holdout || d.headline.dev)) || {};
+          var roi = h.roi;
+          return '<button class="rail-item" data-slug="' + esc(d.slug) + '" aria-pressed="' + (d.slug === state.slug) + '">' +
+            "<span>" + esc(d.title) + '</span><span class="chip ' + verdictClass(d.verdict) + '">' + esc(d.verdict || "") + "</span>" +
+            '<span class="sub">' + (d.n_total_trades || 0).toLocaleString() + " trades · " +
+            (roi == null ? "–" : '<span class="' + sign(roi) + '">' + fmtPct(roi) + "</span> " + (d.headline && d.headline.holdout ? "holdout" : "dev")) +
+            "</span></button>";
+        }).join("") + "</section>";
+      }).join("");
+      el("rail").innerHTML = html || '<p class="muted" style="padding:8px 2px">No strategy matches.</p>';
+      Array.prototype.forEach.call(el("rail").querySelectorAll(".rail-item"), function (b) {
+        b.addEventListener("click", function () { select(b.dataset.slug); });
+      });
+    }
+
+    function strip() {
+      var n = PM.index.length, trades = 0, dead = 0;
+      PM.index.forEach(function (d) { trades += d.n_total_trades || 0; if (verdictClass(d.verdict) === "dead") dead++; });
+      el("strip").innerHTML =
+        '<div><b class="num">' + n + "</b>strategies tested</div>" +
+        '<div><b class="num">' + trades.toLocaleString() + "</b>individual trades</div>" +
+        '<div><b class="num">' + dead + "/" + n + "</b>dead after costs</div>" +
+        '<div><b class="num">0</b>profitable</div>';
+    }
+
+    function select(slug) {
+      state.slug = slug; state.limit = 100; state.open = null; state.period = "all"; state.sport = "all"; state.result = "all";
+      buildRail();
+      if (PM.cache[slug]) return render();
+      el("main").innerHTML = '<div class="loading">Loading trades…</div>';
+      var s = document.createElement("script");
+      s.src = "ledgers/" + slug + ".js";
+      s.onerror = function () { el("main").innerHTML = '<div class="loading">Could not load this ledger.</div>'; };
+      document.head.appendChild(s);
+    }
+    PM._onReceive = function (doc) { if (doc.slug === state.slug) render(); };
+
+    function col(doc, name) { return doc.columns.indexOf(name); }
+
+    function filtered(doc) {
+      var iP = col(doc, "period"), iS = col(doc, "sport"), iPnl = col(doc, "pnl_usd"),
+        iEv = col(doc, "event"), iSide = col(doc, "side"), iNote = col(doc, "note"), iEx = col(doc, "exit_price");
+      var q = (state.tq || "").toLowerCase();
+      return doc.rows.filter(function (r) {
+        if (state.period !== "all" && r[iP] !== state.period) return false;
+        if (state.sport !== "all" && r[iS] !== state.sport) return false;
+        if (state.result === "win" && !(r[iPnl] > 0)) return false;
+        if (state.result === "loss" && !(r[iPnl] < 0)) return false;
+        if (state.result === "void" && !(r[iEx] === 0.5)) return false;
+        if (q && ((r[iEv] || "") + " " + (r[iSide] || "") + " " + (r[iNote] || "")).toLowerCase().indexOf(q) < 0) return false;
+        return true;
+      });
+    }
+
+    function drawChart(doc, rows) {
+      var cv = el("equity"); if (!cv) return;
+      var css = getComputedStyle(document.documentElement);
+      var ink3 = css.getPropertyValue("--ink-3").trim(), line = css.getPropertyValue("--line-strong").trim(),
+        good = css.getPropertyValue("--good").trim(), bad = css.getPropertyValue("--bad").trim(),
+        accent = css.getPropertyValue("--accent").trim();
+      var dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = 220;
+      cv.width = W * dpr; cv.height = H * dpr;
+      var g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+      var iPnl = col(doc, "pnl_usd"), iP = col(doc, "period");
+      if (!rows.length) return;
+      var cum = 0, pts = rows.map(function (r, i) { cum += r[iPnl] || 0; return { x: i, y: cum, hold: r[iP] === "holdout" }; });
+      var lo = Math.min(0, Math.min.apply(null, pts.map(function (p) { return p.y; })));
+      var hi = Math.max(0, Math.max.apply(null, pts.map(function (p) { return p.y; })));
+      var padL = 58, padR = 12, padT = 12, padB = 22, span = (hi - lo) || 1;
+      var X = function (i) { return padL + (W - padL - padR) * (pts.length < 2 ? 0.5 : i / (pts.length - 1)); };
+      var Y = function (v) { return padT + (H - padT - padB) * (1 - (v - lo) / span); };
+      g.strokeStyle = line; g.lineWidth = 1; g.font = '11px "IBM Plex Mono", monospace'; g.fillStyle = ink3;
+      [hi, (hi + lo) / 2, lo].forEach(function (v) {
+        var y = Y(v); g.globalAlpha = .55; g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke(); g.globalAlpha = 1;
+        g.textAlign = "right"; g.fillText((v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString(), padL - 8, y + 3.5);
+      });
+      var zeroY = Y(0); g.strokeStyle = ink3; g.globalAlpha = .8; g.beginPath(); g.moveTo(padL, zeroY); g.lineTo(W - padR, zeroY); g.stroke(); g.globalAlpha = 1;
+      var firstHold = pts.findIndex(function (p) { return p.hold; });
+      if (firstHold > 0) {
+        var hx = X(firstHold); g.strokeStyle = accent; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(hx, padT); g.lineTo(hx, H - padB); g.stroke(); g.setLineDash([]);
+        g.fillStyle = accent; g.textAlign = "left"; g.fillText("holdout →", hx + 5, padT + 10);
+      }
+      g.lineWidth = 2; g.strokeStyle = pts[pts.length - 1].y >= 0 ? good : bad;
+      g.beginPath(); pts.forEach(function (p, i) { var x = X(i), y = Y(p.y); if (i === 0) g.moveTo(x, y); else g.lineTo(x, y); }); g.stroke();
+      g.fillStyle = ink3; g.textAlign = "left"; g.fillText(rows.length.toLocaleString() + " trades", padL, H - 6);
+      g.textAlign = "right"; g.fillText("cumulative P&L, $100 per trade", W - padR, H - 6);
+    }
+
+    function kpi(label, value, cls, ci) {
+      return '<div class="kpi"><div class="k">' + label + '</div><div class="v ' + (cls || "") + '">' + value + "</div>" +
+        (ci ? '<div class="ci">' + ci + "</div>" : "") + "</div>";
+    }
+
+    function render() {
+      var doc = PM.cache[state.slug]; if (!doc) return;
+      var meta = PM.index.filter(function (d) { return d.slug === state.slug; })[0] || {};
+      var rows = filtered(doc);
+      var iS = col(doc, "sport");
+      var sports = {}; doc.rows.forEach(function (r) { sports[r[iS]] = 1; });
+      var dev = (doc.headline || {}).dev, hold = (doc.headline || {}).holdout;
+      var totalPnl = rows.reduce(function (a, r) { return a + (r[col(doc, "pnl_usd")] || 0); }, 0);
+
+      var html = '<section class="panel">' +
+        '<div class="panel-pad"><div class="head-row"><span class="eyebrow">' + esc(meta.group || "") + "</span>" +
+        '<span class="chip ' + verdictClass(doc.verdict) + '">' + esc(doc.verdict || "") + "</span></div>" +
+        "<h2 style=\"margin-top:6px\">" + esc(doc.title) + "</h2>" +
+        '<p class="lede">' + esc(doc.hypothesis) + "</p>" +
+        (doc.mechanism ? '<p class="muted" style="margin-top:8px">' + esc(doc.mechanism) + "</p>" : "") + "</div>" +
+        '<dl class="rules">' +
+        "<div><dt>Entry</dt><dd>" + esc(doc.entry_rule) + "</dd></div>" +
+        "<div><dt>Exit</dt><dd>" + esc(doc.exit_rule) + "</dd></div>" +
+        "<div><dt>Costs</dt><dd>" + esc(doc.cost_model) + "</dd></div>" +
+        "</dl>" +
+        '<div class="kpis">' +
+        kpi("Development" + (doc.periods && doc.periods.dev ? " · " + esc(doc.periods.dev) : ""),
+          dev ? fmtPct(dev.roi) : "–", dev ? sign(dev.roi) : "",
+          dev ? (dev.bets || 0).toLocaleString() + " bets · CI " + fmtPct(dev.ci_lo) + " to " + fmtPct(dev.ci_hi) : "no bets in this window") +
+        kpi("Holdout" + (doc.periods && doc.periods.holdout ? " · " + esc(doc.periods.holdout) : ""),
+          hold ? fmtPct(hold.roi) : "–", hold ? sign(hold.roi) : "",
+          hold ? (hold.bets || 0).toLocaleString() + " bets · CI " + fmtPct(hold.ci_lo) + " to " + fmtPct(hold.ci_hi) : "no bets in this window") +
+        kpi("Trades made", (doc.n_total_trades || doc.rows.length).toLocaleString(), "",
+          doc.page_sampled ? doc.rows.length.toLocaleString() + " shown here (sampled)" : "all shown here") +
+        kpi("P&L shown", fmtUsd(totalPnl), sign(totalPnl), "on the filtered rows") +
+        "</div>" +
+        '<div class="chart-wrap"><div class="chart-head"><span class="eyebrow">Equity curve</span>' +
+        '<span class="legend"><span><i style="background:var(--accent)"></i>holdout starts</span>' +
+        "<span>flat $100 per trade, fees included</span></span></div>" +
+        '<canvas id="equity" role="img" aria-label="Cumulative profit and loss across the filtered trades"></canvas></div>' +
+        '<div class="controls">' +
+        '<label for="fPeriod">Period</label><select id="fPeriod"><option value="all">All</option><option value="dev">Development</option><option value="holdout">Holdout</option></select>' +
+        '<label for="fSport">Sport</label><select id="fSport"><option value="all">All</option>' +
+        Object.keys(sports).sort().map(function (s) { return '<option value="' + esc(s) + '">' + esc(s) + "</option>"; }).join("") + "</select>" +
+        '<label for="fResult">Result</label><select id="fResult"><option value="all">All</option><option value="win">Winners</option><option value="loss">Losers</option><option value="void">Voids</option></select>' +
+        '<input type="search" id="fQ" placeholder="Search event, side, note" aria-label="Search trades" style="flex:1;min-width:160px">' +
+        "</div>" +
+        '<div class="table-scroll"><table><thead><tr>' +
+        "<th>#</th><th>Date</th><th>Event</th><th>Side bought</th><th class=\"r\">Entry</th><th class=\"r\">Stake</th>" +
+        "<th class=\"r\">Fee</th><th>Exit</th><th class=\"r\">Payout</th><th class=\"r\">P&L</th><th class=\"r\">ROI</th>" +
+        '</tr></thead><tbody id="tbody"></tbody></table></div>' +
+        (rows.length > state.limit ? '<button class="more" id="more">Show more trades (' + (rows.length - state.limit).toLocaleString() + " left)</button>" : "") +
+        '<div class="notes">' +
+        (doc.review ? "<h3>What review found</h3><p>" + esc(doc.review) + "</p>" : "") +
+        (doc.caveats && doc.caveats.length ? "<h3 style=\"margin-top:12px\">Caveats</h3><ul>" + doc.caveats.map(function (c) { return "<li>" + esc(c) + "</li>"; }).join("") + "</ul>" : "") +
+        (doc.page_sampled ? '<p style="margin-top:10px">The table shows a time-spread sample of this strategy\'s trades; the headline figures above are computed on every trade.</p>' : "") +
+        '<p class="paths">' + esc(doc.report_path || "") + (doc.code_path ? " · " + esc(doc.code_path) : "") + "</p>" +
+        "</div></section>";
+      el("main").innerHTML = html;
+      el("fPeriod").value = state.period; el("fSport").value = state.sport; el("fResult").value = state.result;
+      el("fQ").value = state.tq || "";
+      el("fPeriod").onchange = function () { state.period = this.value; state.limit = 100; render(); };
+      el("fSport").onchange = function () { state.sport = this.value; state.limit = 100; render(); };
+      el("fResult").onchange = function () { state.result = this.value; state.limit = 100; render(); };
+      el("fQ").oninput = function () { state.tq = this.value; state.limit = 100; renderRows(doc, filtered(doc)); };
+      if (el("more")) el("more").onclick = function () { state.limit += 200; render(); };
+      renderRows(doc, rows);
+      drawChart(doc, rows);
+    }
+
+    function renderRows(doc, rows) {
+      var c = {}; doc.columns.forEach(function (n, i) { c[n] = i; });
+      var shown = rows.slice(0, state.limit);
+      el("tbody").innerHTML = shown.map(function (r) {
+        var pnl = r[c.pnl_usd], exitTxt = r[c.exit_kind] === "resolution"
+          ? (r[c.exit_price] === 1 ? "won" : r[c.exit_price] === 0 ? "lost" : "void " + fmtC(r[c.exit_price]))
+          : esc(r[c.exit_kind]) + " " + fmtC(r[c.exit_price]);
+        var id = "t" + r[c.id];
+        var open = state.open === r[c.id];
+        var main = '<tr class="trade" data-id="' + r[c.id] + '" aria-expanded="' + open + '">' +
+          '<td class="num">' + r[c.id] + "</td>" +
+          '<td class="num">' + esc(r[c.date]) + "</td>" +
+          '<td class="wrap">' + esc(r[c.event]) + "</td>" +
+          '<td class="wrap">' + esc(r[c.side]) + "</td>" +
+          '<td class="r num">' + fmtC(r[c.entry_price]) + "</td>" +
+          '<td class="r num">' + fmtUsd(r[c.stake_usd]) + "</td>" +
+          '<td class="r num">' + (r[c.fee_usd] ? fmtUsd(r[c.fee_usd]) : "–") + "</td>" +
+          "<td>" + exitTxt + "</td>" +
+          '<td class="r num">' + fmtUsd(r[c.payout]) + "</td>" +
+          '<td class="r num ' + sign(pnl) + '">' + fmtUsd(pnl) + "</td>" +
+          '<td class="r num ' + sign(r[c.roi]) + '">' + fmtPct(r[c.roi]) + "</td></tr>";
+        if (!open) return main;
+        return main + '<tr class="detail"><td colspan="11"><div class="walk">' +
+          "<div><h4>Signal</h4><p>" + esc(r[c.note] || "—") + "</p></div>" +
+          "<div><h4>Entered</h4><p class=\"big\">" + fmtC(r[c.entry_price]) + " per share</p><p>" + when(r[c.entry_ts]) +
+          " · " + fmtUsd(r[c.stake_usd]) + " staked = " + (r[c.entry_price] ? (r[c.stake_usd] / r[c.entry_price]).toFixed(1) : "–") + " shares" +
+          (r[c.fee_usd] ? " · fee " + fmtUsd(r[c.fee_usd]) : " · no taker fee") + "</p></div>" +
+          "<div><h4>Exited</h4><p class=\"big\">" + esc(r[c.exit_kind]) + " at " + fmtC(r[c.exit_price]) + "</p><p>" + when(r[c.exit_ts]) +
+          " · returned " + fmtUsd(r[c.payout]) + "</p></div>" +
+          '<div><h4>Result</h4><p class="big ' + sign(r[c.pnl_usd]) + '">' + fmtUsd(r[c.pnl_usd]) + " · " + fmtPct(r[c.roi]) + "</p><p>" +
+          esc(r[c.league] || "") + (r[c.market] ? " · " + esc(r[c.market]) : "") + " · " + esc(r[c.period]) + "</p></div>" +
+          "</div></td></tr>";
+      }).join("");
+      Array.prototype.forEach.call(el("tbody").querySelectorAll("tr.trade"), function (tr) {
+        tr.addEventListener("click", function () {
+          var id = Number(tr.dataset.id);
+          state.open = state.open === id ? null : id;
+          renderRows(doc, rows);
+        });
+      });
+    }
+
+    function boot() {
+      if (!PM.index || !PM.index.length) { el("main").innerHTML = '<div class="loading">No ledgers found.</div>'; return; }
+      strip(); buildRail();
+      el("railSearch").addEventListener("input", function () { state.q = this.value; buildRail(); });
+      window.addEventListener("resize", function () { var doc = PM.cache[state.slug]; if (doc) drawChart(doc, filtered(doc)); });
+      select(PM.index[0].slug);
+    }
+    if (document.readyState === "complete" || document.readyState === "interactive") boot();
+    else document.addEventListener("DOMContentLoaded", boot);
+  })();
+</script>
