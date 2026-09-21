@@ -41,8 +41,13 @@ def _sample(df: pd.DataFrame, seed: int = 0) -> tuple[pd.DataFrame, bool]:
         return df, False
     hold = df[df.period == "holdout"]
     dev = df[df.period == "dev"]
+    share = MAX_ROWS // 2 if (len(hold) and len(dev)) else MAX_ROWS
+    if len(hold) > share:
+        hold = hold.sample(share, random_state=seed)
     keep = max(MAX_ROWS - len(hold), 1000)
-    return pd.concat([dev.sample(min(keep, len(dev)), random_state=seed), hold]), True
+    if len(dev) > keep:
+        dev = dev.sample(keep, random_state=seed)
+    return pd.concat([dev, hold]), True
 
 
 def _write(meta: dict, trades: pd.DataFrame) -> None:

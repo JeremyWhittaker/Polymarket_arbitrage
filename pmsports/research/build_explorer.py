@@ -32,11 +32,12 @@ def _trim(doc: dict) -> tuple[list, bool]:
         trimmed = True
         hold = [r for r in rows if r[i_period] == "holdout"]
         dev = [r for r in rows if r[i_period] != "holdout"]
-        half = MAX_ROWS // 2
-        if len(hold) > half and dev:                       # thin both, keep the holdout majority
-            hold = hold[:: max(1, len(hold) // half)][:half]
+        # thin whichever period is oversized; a strategy with only one period still gets capped
+        share = MAX_ROWS // 2 if (hold and dev) else MAX_ROWS
+        if len(hold) > share:
+            hold = hold[:: max(1, len(hold) // share)][:share]
         keep = max(MAX_ROWS - len(hold), 400)
-        if dev:
+        if len(dev) > keep:
             dev = dev[:: max(1, len(dev) // keep)][:keep]
         rows = sorted(dev + hold, key=lambda r: r[cols.index("entry_ts")])
     idx = {c: cols.index(c) for c in ROUND if c in cols}
