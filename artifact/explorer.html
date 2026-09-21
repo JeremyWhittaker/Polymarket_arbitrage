@@ -211,6 +211,9 @@
     var fmtUsd = function (v) { return (v == null || isNaN(v)) ? "–" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
     var fmtC = function (v) { return (v == null || isNaN(v)) ? "–" : (v * 100).toFixed(1) + "¢"; };
     var sign = function (v) { return v > 0.0000001 ? "pos" : v < -0.0000001 ? "neg" : "zero"; };
+    // the reports quote profit per dollar DEPLOYED (stake + fee); the ledger's roi column divides
+    // by stake alone, which reads ~1 point high and can print below -100% on a total loss
+    var roiOf = function (r, c) { var d = (r[c.stake_usd] || 0) + (r[c.fee_usd] || 0); return d ? r[c.pnl_usd] / d : r[c.roi]; };
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
     var when = function (ts) { if (!ts) return "–"; var d = new Date(ts * 1000); return d.toISOString().replace("T", " ").slice(0, 16) + "Z"; };
 
@@ -362,7 +365,7 @@
         "</div>" +
         '<div class="table-scroll"><table><thead><tr>' +
         "<th>#</th><th>Date</th><th>Event</th><th>Side bought</th><th class=\"r\">Entry</th><th class=\"r\">Stake</th>" +
-        "<th class=\"r\">Fee</th><th>Exit</th><th class=\"r\">Payout</th><th class=\"r\">P&L</th><th class=\"r\">ROI</th>" +
+        "<th class=\"r\">Fee</th><th>Exit</th><th class=\"r\">Payout</th><th class=\"r\">P&L</th><th class=\"r\" title="profit per dollar deployed (stake + fee)">ROI</th>" +
         '</tr></thead><tbody id="tbody"></tbody></table></div>' +
         (rows.length > state.limit ? '<button class="more" id="more">Show more trades (' + (rows.length - state.limit).toLocaleString() + " left)</button>" : "") +
         '<div class="notes">' +
@@ -403,7 +406,7 @@
           "<td>" + exitTxt + "</td>" +
           '<td class="r num">' + fmtUsd(r[c.payout]) + "</td>" +
           '<td class="r num ' + sign(pnl) + '">' + fmtUsd(pnl) + "</td>" +
-          '<td class="r num ' + sign(r[c.roi]) + '">' + fmtPct(r[c.roi]) + "</td></tr>";
+          '<td class="r num ' + sign(roiOf(r, c)) + '">' + fmtPct(roiOf(r, c)) + "</td></tr>";
         if (!open) return main;
         return main + '<tr class="detail"><td colspan="11"><div class="walk">' +
           "<div><h4>Signal</h4><p>" + esc(r[c.note] || "—") + "</p></div>" +
@@ -412,7 +415,7 @@
           (r[c.fee_usd] ? " · fee " + fmtUsd(r[c.fee_usd]) : " · no taker fee") + "</p></div>" +
           "<div><h4>Exited</h4><p class=\"big\">" + esc(r[c.exit_kind]) + " at " + fmtC(r[c.exit_price]) + "</p><p>" + when(r[c.exit_ts]) +
           " · returned " + fmtUsd(r[c.payout]) + "</p></div>" +
-          '<div><h4>Result</h4><p class="big ' + sign(r[c.pnl_usd]) + '">' + fmtUsd(r[c.pnl_usd]) + " · " + fmtPct(r[c.roi]) + "</p><p>" +
+          '<div><h4>Result</h4><p class="big ' + sign(r[c.pnl_usd]) + '">' + fmtUsd(r[c.pnl_usd]) + " · " + fmtPct(roiOf(r, c)) + "</p><p>" +
           esc(r[c.league] || "") + (r[c.market] ? " · " + esc(r[c.market]) : "") + " · " + esc(r[c.period]) + "</p></div>" +
           "</div></td></tr>";
       }).join("");
