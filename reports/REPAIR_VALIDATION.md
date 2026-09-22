@@ -13,3 +13,16 @@ Command: OPENBLAS_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m py
 The first delegated drafts were rejected despite passing unit tests: one actual builder call raised a tuple-unpack error, and its state ordering would have broken expiry. They were preserved on a working branch and corrected before this checkpoint. Parent review separately verified the final production behavior.
 
 Remaining panel execution work includes side-specific entry/capacity rules, explicit staleness limits, terminal-state expiry, and all schedule-file merging. These are assigned to the shared execution phase; the panel now separates causal references from later trade proxies, and neither is presented here as an observed available order-book ask. Historic evaluated periods have already been explored.
+
+
+## Coverage and desk checkpoint — 2026-09-22
+
+Accepted main commit8d9143e replaces the rejected draft semantics. Collection defaults to no eventual-volume filter, upgrades request market creation through closure with version/window/output manifests, and failures preserve old raw tapes. Pregame decision is start minus600s; only earlier fills supply signal and liquidity; first same-side print more than5s later supplies a size-capped proxy. These corrections do not make old selected/incomplete data representative.
+
+Compact rebuilds now migrate market/wallet IDs from actual legacy tables, append new IDs, and preserve missing/empty old slots. Source/code/output identities and a staged promotion marker prevent silently mixed or stale versioned generations. Legacy caches explicitly warn. Actual miniature full rebuild and subsequent empty-market rebuild passed.
+
+Fresh-environment full suite:35passed,1optionalbrowser-test skipped. Separate browser-enabled desk suite:9passed. Desktop1440x1100 and mobile390x844 inspected, no JS errors/viewport overflow. All25ledgers valid; four restored exports contain334409rows. Finalpage of190954-row ledger verified. Other favorite-at90filter now406trades/PnL-$1173.16, not17729globaltrades; football775development/65historicalevaluation, evaluationROI-1.1453%. These are reconciliation checks of historical reports, not accepted trading results. Warmindex6–12ms; coldrebuild~5.9s. Corrected API/UI deployed after commit/push via existing user service and checked at localhost8808 and Tailscale100.92.20.16:8808. Source remains private/noindex.
+
+Recovered live replay of2026-09-19:61 qualifying scoring events across14games, selected for subsequent move>=3c. Median bookt50=2.856s, MLBfeed=41.095s, PMsportsfeed=71.412s relative to retrospective contact time. Paired median feedminusbook=37.114s and67.625s respectively. MLBfeed precededbook in1/61, PMsports0/61. This one selected capture provides adverse timing evidence for free-feed reaction, not a universal latency bound or trading PnL.
+
+Fullcorpus strategy reruns, execution completion, nine unfinished selected sports protocols and final viability synthesis remain in progress. Historical reports retain no fresh-holdout status.
