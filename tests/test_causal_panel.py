@@ -10,6 +10,21 @@ import tempfile
 import pathlib
 import shutil
 
+
+def test_postponed_contract_alias_uses_cached_tokens(tmp_path):
+    from pmsports.panel import _match_cached_contracts
+    games = pd.DataFrame([
+        dict(game_pk=7, slug="postponed", home_token="old-h", away_token="old-a"),
+        dict(game_pk=7, slug="played", home_token="new-h", away_token="new-a"),
+    ])
+    pd.DataFrame({"asset": ["new-h", "new-a"]}).to_parquet(tmp_path / "7.parquet")
+    matched = _match_cached_contracts(games, tmp_path)
+    assert matched.slug.tolist() == ["played"]
+    assert _match_cached_contracts(pd.concat([games, games]), tmp_path).slug.tolist() == ["played"]
+    pd.DataFrame({"asset": ["unknown"]}).to_parquet(tmp_path / "7.parquet")
+    with pytest.raises(ValueError, match="ambiguous cached contract"):
+        _match_cached_contracts(games, tmp_path)
+
 def test_metadata_rollover(tmp_path, monkeypatch):
     monkeypatch.setattr("pmsports.analysis.live.DATA_DIR", tmp_path)
     # Create yesterday's dir with games.jsonl

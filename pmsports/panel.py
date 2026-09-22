@@ -35,6 +35,30 @@ def _load_dir(path: Path) -> pd.DataFrame:
     return pd.concat((pd.read_parquet(f) for f in fs), ignore_index=True)
 
 
+def _match_cached_contracts(games: pd.DataFrame, trades_dir: Path) -> pd.DataFrame:
+    """Resolve postponed-game aliases using the actual cached tape's token identity.
+
+    Raw tapes are keyed by MLB game, so two distinct contracts cannot share one
+    cache safely. This selects the represented contract, never by future volume
+    or payout. Ambiguous identities fail closed instead of duplicating states.
+    """
+    games = games.drop_duplicates().copy()
+    keep = []
+    for pk, group in games.groupby("game_pk", sort=False):
+        if len(group) == 1:
+            keep.append(group)
+            continue
+        path = trades_dir / f"{int(pk)}.parquet"
+        assets = set(pd.read_parquet(path, columns=["asset"]).asset.dropna().astype(str)) if path.exists() else set()
+        matched = group[group.apply(lambda r: bool(assets) and assets.issubset(
+            {str(r.home_token), str(r.away_token)}), axis=1)]
+        if len(matched) != 1:
+            raise ValueError(f"ambiguous cached contract identity for MLB game {pk}: {len(matched)} matching rows")
+        log.warning("MLB game %s has %s contract aliases; cache represents %s only", pk, len(group), matched.iloc[0].slug)
+        keep.append(matched)
+    return pd.concat(keep, ignore_index=True) if keep else games
+
+
 def state_rows(plays: pd.DataFrame, game_types: pd.Series = None, scheduled_innings: pd.Series = None) -> pd.DataFrame:
     """Post-play state per PA, plus a half-inning-start checkpoint row per half-inning.
 
@@ -137,6 +161,7 @@ def build_panel(sport: str = "mlb") -> None:
     games = pd.read_parquet(d / "games.parquet")
     games = games[games.game_pk.notna() & ~games.resolution_mismatch]
     games["game_pk"] = games.game_pk.astype(int)
+    games = _match_cached_contracts(games, d / "trades")
     plays = _load_dir(d / "plays")
     log.info("loaded %d plays", len(plays))
 
