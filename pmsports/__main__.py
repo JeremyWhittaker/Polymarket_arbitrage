@@ -51,7 +51,8 @@ def main() -> None:
     sub.add_parser("wallets-report")
     sub.add_parser("favorites")
     sub.add_parser("thresholds")
-    sub.add_parser("calibration")
+    cl = sub.add_parser("calibration")
+    cl.add_argument("--points", action="store_true", help="1-cent resolution sweep from 50c up")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -104,8 +105,8 @@ def main() -> None:
         from .analysis.thresholds import run
         run()
     elif a.cmd == "calibration":
-        from .analysis.calibration import run
-        run()
+        from .analysis import calibration
+        calibration.run_points() if a.points else calibration.run()
 
 
 if __name__ == "__main__":

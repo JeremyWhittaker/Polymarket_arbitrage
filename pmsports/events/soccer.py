@@ -237,7 +237,9 @@ def _abbr_score(abbr: str, team: dict) -> float:
     real abbreviation -> team map from games that are unambiguous on kickoff time.
     """
     import difflib
-    a = _norm(abbr)
+    # Polymarket appends a digit when two teams in a league share a prefix
+    # (ucl "ast4", "bas1"); the digit carries no information about the name.
+    a = re.sub(r"\d+$", "", _norm(abbr))
     if not a:
         return 0.0
     full, keys = _variants(team)

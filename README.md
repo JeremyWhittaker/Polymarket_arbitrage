@@ -78,6 +78,15 @@ holdout alike (e.g. >= 95c: -1.0% dev / -0.8% holdout on 17.6k bets; >= 99c: -0.
 mirror (buying longshots) is worse: -4% to -11%. Ledgers for >= 90 / 95 / 99c and the <= 10c mirror
 are browsable in the research desk.
 
+## Every price point from 50c — [`reports/CALIBRATION_POINTS.md`](reports/CALIBRATION_POINTS.md)
+
+At 1-cent resolution the dollar-weighted table shows a bump around 70-75c (74c: +7.8%, positive in
+both dev and holdout). It is a weighting artifact, not an edge. The same 726,623 fills at 74-75c:
+dollar-weighted **+6.8%**, equal-weighted per fill +0.8%, **one bet per market -0.4%**. The median
+fill there is $11 and the top 1% of fills carry 56% of the dollars. Every tradable version loses:
+buying the first print in a 73-76c band (dev -0.7%, holdout -1.0%) and every "buy once it crosses T"
+threshold from 50c to 99c, in both windows.
+
 ## Threshold strategies — [`reports/THRESHOLDS.md`](reports/THRESHOLDS.md)
 
 - **Bet any team priced >= T pregame (T = 50c..90c), per sport:** no threshold is profitable
