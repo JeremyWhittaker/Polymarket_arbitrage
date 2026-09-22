@@ -25,6 +25,16 @@ def test_postponed_contract_alias_uses_cached_tokens(tmp_path):
     with pytest.raises(ValueError, match="ambiguous cached contract"):
         _match_cached_contracts(games, tmp_path)
 
+
+def test_fee_recovery_matches_only_known_contract_metadata():
+    from pmsports.panel import _restore_known_fees
+    games = pd.DataFrame(dict(condition_id=['known-free','known-paid','unknown'],fee_rate=[np.nan,.025,np.nan]))
+    metadata = pd.DataFrame(dict(condition_id=['known-free','known-paid'],fee_rate=[0.,.05]))
+    fixed = _restore_known_fees(games,metadata)
+    assert fixed.fee_rate.iloc[0] == 0
+    assert fixed.fee_rate.iloc[1] == .025
+    assert pd.isna(fixed.fee_rate.iloc[2])
+
 def test_metadata_rollover(tmp_path, monkeypatch):
     monkeypatch.setattr("pmsports.analysis.live.DATA_DIR", tmp_path)
     # Create yesterday's dir with games.jsonl

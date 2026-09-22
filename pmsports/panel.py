@@ -59,6 +59,22 @@ def _match_cached_contracts(games: pd.DataFrame, trades_dir: Path) -> pd.DataFra
     return pd.concat(keep, ignore_index=True) if keep else games
 
 
+def _restore_known_fees(games: pd.DataFrame, canonical: pd.DataFrame) -> pd.DataFrame:
+    """Legacy game discovery omitted disabled-fee rates; recover exact known contracts.
+
+    Unknown contracts stay unknown. This never replaces a recorded positive fee
+    with a current global fee assumption or infers fees from the trade outcome.
+    """
+    out = games.copy()
+    rates = canonical.drop_duplicates('condition_id').set_index('condition_id').fee_rate
+    known = out.condition_id.map(rates)
+    valid = known.notna() & np.isfinite(known) & known.ge(0)
+    missing = out.fee_rate.isna()
+    out.loc[missing & valid, 'fee_rate'] = known[missing & valid]
+    log.info('Recovered %s missing contract-specific fees; %s remain unknown', int((missing & valid).sum()), int(out.fee_rate.isna().sum()))
+    return out
+
+
 def state_rows(plays: pd.DataFrame, game_types: pd.Series = None, scheduled_innings: pd.Series = None) -> pd.DataFrame:
     """Post-play state per PA, plus a half-inning-start checkpoint row per half-inning.
 
@@ -162,6 +178,9 @@ def build_panel(sport: str = "mlb") -> None:
     games = games[games.game_pk.notna() & ~games.resolution_mismatch]
     games["game_pk"] = games.game_pk.astype(int)
     games = _match_cached_contracts(games, d / "trades")
+    from .research.common import MARKETS, markets
+    if MARKETS.exists():
+        games = _restore_known_fees(games, markets()[['condition_id', 'fee_rate']])
     plays = _load_dir(d / "plays")
     log.info("loaded %d plays", len(plays))
 
