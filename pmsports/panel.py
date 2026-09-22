@@ -21,6 +21,7 @@ from .collect import _write, sport_dir
 log = logging.getLogger("pmsports")
 
 SETTLE_S = 60
+MAX_REFERENCE_AGE_S = 120.0
 EXEC_DELAY_S = 5.0        # market price sampled this long after the play ends
 PREGAME_WIN_S = 600  # trade window before first pitch for the trade-based pregame price
 MIN_TRADES = 3       # fills needed before a trade-median price is preferred over bars
@@ -42,6 +43,7 @@ def state_rows(plays: pd.DataFrame, game_types: pd.Series = None, scheduled_inni
     """
     p = plays.sort_values(["game_pk", "play_idx"]).copy()
     p["diff"] = p.home_score - p.away_score       # home perspective
+    p["state_expiry_ts"] = p.groupby("game_pk").end_ts.shift(-1)
     p["checkpoint"] = False
     last = p[p.outs == 3].copy()
     if len(last):
@@ -78,6 +80,56 @@ def _asof(ts: np.ndarray, vals: np.ndarray, q: np.ndarray) -> np.ndarray:
         return np.full(len(q), np.nan)
     i = np.searchsorted(ts, q, side="right") - 1
     return np.where(i >= 0, vals[np.clip(i, 0, None)], np.nan)
+
+
+def attach_execution(g: pd.DataFrame, tape, home_token: str, away_token: str) -> pd.DataFrame:
+    """Causal reference and separate home/away first-print proxies, ending before next play.
+
+    Raw settlement clock stands in for receipt; pending-order cancellation is NOT modeled.
+    State expiry is an idealized order deadline, not evidence a venue can cancel pending orders.
+    """
+    g = g.copy()
+    q = g.decision_ts.to_numpy(float)
+    for col in ("mkt_p", "mkt_ts", "mkt_staleness", "mkt_size", "exec_p", "exec_ts", "exec_size"):
+        g[col] = np.nan
+    g["mkt_side"], g["exec_side"] = "", ""
+    for name in ("home", "away"):
+        for col in ("p", "ts", "size", "id"):
+            g[f"exec_{name}_{col}"] = np.nan
+    if tape is None or not len(tape[0]):
+        return g
+    ts, p, size, rawside, asset = tape
+    known = np.isin(asset, [home_token, away_token]) & np.isin(rawside, ["BUY", "SELL"])
+    raw_id = np.arange(len(ts))[known]
+    ts, p, size, rawside, asset = (np.asarray(x)[known] for x in tape)
+    if not len(ts):
+        return g
+    home = ((asset == home_token) & (rawside == "BUY")) | ((asset == away_token) & (rawside == "SELL"))
+    label = np.char.add(np.char.add(rawside, "_"), np.where(asset == home_token, "HOME", "AWAY"))
+    before = np.searchsorted(ts, q, side="left") - 1
+    safe = np.maximum(before, 0)
+    valid = (before >= 0) & (q - ts[safe] <= MAX_REFERENCE_AGE_S)
+    for col, vals in (("mkt_p", p), ("mkt_ts", ts), ("mkt_size", size)):
+        g[col] = np.where(valid, vals[safe], np.nan)
+    g["mkt_staleness"] = q - g.mkt_ts
+    g["mkt_side"] = np.where(valid, label[safe], "")
+    expiry = g.state_expiry_ts.to_numpy(float)
+    for name, mask in (("home", home), ("away", ~home), ("", np.ones(len(ts), bool))):
+        ix = np.flatnonzero(mask)
+        if not len(ix):
+            continue
+        candidate = np.searchsorted(ts[ix], q + EXEC_DELAY_S, side="right")
+        j = ix[np.minimum(candidate, len(ix) - 1)]
+        ok = (candidate < len(ix)) & np.isfinite(expiry) & (ts[j] < expiry)
+        prefix = f"exec_{name}_" if name else "exec_"
+        value = p if name != "away" else 1 - p
+        for col, vals in (("p", value), ("ts", ts), ("size", size)):
+            g[prefix + col] = np.where(ok, vals[j], np.nan)
+        if name:
+            g[prefix + "id"] = np.where(ok, raw_id[j], np.nan)
+        else:
+            g["exec_side"] = np.where(ok, label[j], "")
+    return g
 
 
 def build_panel(sport: str = "mlb") -> None:
@@ -164,47 +216,14 @@ def build_panel(sport: str = "mlb") -> None:
     # exec_size: size of the execution proxy fill
     # exec_side: side of the execution proxy fill ("BUY" or "SELL")
 
-        g["mkt_p"], g["mkt_ts"], g["mkt_staleness"] = np.nan, np.nan, np.nan
-        g["mkt_size"], g["mkt_side"] = np.nan, ""
-        g["exec_p"], g["exec_ts"] = np.nan, np.nan
-        g["exec_size"], g["exec_side"] = np.nan, ""
-
         t = tr_of(pk)
-        if t is not None and len(t[0]) > 0:
-            tts, tv, tsize, tside, tasset = t
-
-            g_row = games[games.game_pk == pk].iloc[0]
-            home_token = g_row.home_token
-            away_token = g_row.away_token
-
-            is_home = (tasset == home_token)
-            is_away = (tasset == away_token)
-
-            norm_side = np.where(is_home, np.char.add(tside, "_HOME"),
-                                 np.where(is_away, np.char.add(tside, "_AWAY"), ""))
-
-            idx_before = np.searchsorted(tts, q, side="left") - 1
-            valid_before = idx_before >= 0
-
-            g["mkt_p"] = np.where(valid_before, tv[np.clip(idx_before, 0, None)], np.nan)
-            g["mkt_ts"] = np.where(valid_before, tts[np.clip(idx_before, 0, None)], np.nan)
-            g["mkt_staleness"] = q - g["mkt_ts"]
-            g["mkt_size"] = np.where(valid_before, tsize[np.clip(idx_before, 0, None)], np.nan)
-            g["mkt_side"] = np.where(valid_before, norm_side[np.clip(idx_before, 0, None)], "")
-
-            next_q = np.append(q[1:], np.inf)
-            idx_after = np.searchsorted(tts, q + EXEC_DELAY_S, side="right")
-            valid_after = (idx_after < len(tts)) & (tts[np.clip(idx_after, 0, len(tts)-1)] < next_q)
-
-            g["exec_p"] = np.where(valid_after, tv[np.clip(idx_after, 0, len(tts)-1)], np.nan)
-            g["exec_ts"] = np.where(valid_after, tts[np.clip(idx_after, 0, len(tts)-1)], np.nan)
-            g["exec_size"] = np.where(valid_after, tsize[np.clip(idx_after, 0, len(tts)-1)], np.nan)
-            g["exec_side"] = np.where(valid_after, norm_side[np.clip(idx_after, 0, len(tts)-1)], "")
+        g_row = games[games.game_pk == pk].iloc[0]
+        g = attach_execution(g, t, str(g_row.home_token), str(g_row.away_token))
 
         parts.append(g)
     panel = pd.concat(parts, ignore_index=True)
     # stale states are dropped
-    panel = panel[panel.mkt_p.between(0.005, 0.995)]
+    panel = panel[panel.mkt_p.between(0.005, 0.995) & panel.mkt_staleness.le(MAX_REFERENCE_AGE_S)]
     _write(panel, d / "panel.parquet")
     log.info("pregame rows %d, panel rows %d (%d checkpoints)", len(pregame), len(panel),
              int(panel.checkpoint.sum()))
@@ -218,7 +237,7 @@ def build_panel(sport: str = "mlb") -> None:
         sched_files = list((d / "mlb_only").glob("schedule_*.parquet"))
         all_games_dfs = [games]
         if sched_files:
-            all_games_dfs.append(pd.read_parquet(sched_files[0]))
+            all_games_dfs.extend(pd.read_parquet(f) for f in sorted(sched_files))
         all_games = pd.concat(all_games_dfs, ignore_index=True).drop_duplicates("game_pk")
         game_types = all_games.set_index("game_pk")["game_type"]
         sched_inn = all_games.set_index("game_pk").get("scheduled_innings")

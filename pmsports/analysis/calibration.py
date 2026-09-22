@@ -6,12 +6,10 @@ Part A (descriptive): every taker fill is "someone paid q for this side, and the
 Bucket by q and ask what fraction actually won. Fine buckets at the top end (90c..99c), split
 pregame vs in-play and by sport.
 
-Part B (tradable): for each market, the FIRST fill at or above a threshold T is an executable
-entry (a taker really traded there). Buy $100 of that side, hold to resolution, pay the
-market's actual taker fee. One bet per market, dev (< 2026-07-01) vs holdout, per sport.
-The mirror rule buys the cheap side at or below 1-T.
-
-Selection uses pregame information only (pre_usd >= $25k): total volume is outcome-correlated.
+Part B: a threshold print is a signal; a later same-side print is a size-bounded
+execution PROXY. Neither price nor depth is a historical order-book observation.
+The existing corpus has incomplete lifetime coverage; prior observed volume >=$50k
+is a sensitivity floor, not proof of an unbiased universe. July2026 was already explored.
 """
 from __future__ import annotations
 
@@ -23,12 +21,13 @@ import numpy as np
 import pandas as pd
 
 from ..polymarket import taker_fee
+from ..execution import TapeReplay, prior_notional
 from ..research.common import cluster_ci, fills, markets
 
 log = logging.getLogger("pmsports")
 REPORTS = Path(__file__).resolve().parents[2] / "reports"
 LEDGERS = Path(__file__).resolve().parents[2] / "data" / "research" / "ledgers"
-PREGAME_MIN_USD = 25_000
+PREGAME_MIN_USD = 50_000
 SPLIT_TS = pd.Timestamp("2026-07-01", tz="UTC").timestamp()
 STAKE = 100.0
 THRESHOLDS = [0.60, 0.70, 0.80, 0.85, 0.90, 0.925, 0.95, 0.97, 0.98, 0.99]
@@ -39,10 +38,11 @@ SPORTS = ["baseball", "soccer", "american_football", "basketball", "tennis", "es
 def _load() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compact fill frame: ids stay integer codes (35M event-slug strings would cost GBs)."""
     mk = markets()
-    mk = mk[(mk.pre_usd.fillna(0) >= PREGAME_MIN_USD) & mk.game_start_ts.notna()]
-    f = fills(markets=mk.m.to_numpy(), columns=["m", "ts", "q", "y", "size", "fee_rate", "in_play"])
-    keep = (f.y != 0.5) & f.q.between(0.02, 0.995)          # voids are not a win/loss question
-    f = f[keep]
+    mk = mk[mk.game_start_ts.notna()]
+    f = fills(markets=mk.m.to_numpy(), columns=["m", "s", "w", "ts", "q", "y", "size", "fee_rate", "in_play"])
+    f["prior_usd"] = prior_notional(f)
+    keep = f.q.between(0.02, 0.995)  # retain eventual voids in causal strategy selection
+    f = f[keep].copy()
     meta = mk.set_index("m")
     sport_codes, sport_names = pd.factorize(meta.family.to_numpy())
     event_codes, _ = pd.factorize(meta.event_slug.to_numpy())
@@ -50,13 +50,15 @@ def _load() -> tuple[pd.DataFrame, pd.DataFrame]:
     row = pos.reindex(f.m).to_numpy()
     f["sport"] = pd.Categorical.from_codes(sport_codes[row].astype(np.int16), categories=pd.Index(sport_names))
     f["event"] = event_codes[row].astype(np.int32)               # cluster key, numeric
-    log.info("%d fills in %d markets (pregame volume >= $%s), %.1f GB",
+    f["closed_ts"] = meta.closed_ts.to_numpy()[row]
+    log.info("%d fills in %d markets (prior-volume sensitivity floor $%s), %.1f GB",
              len(f), f.m.nunique(), f"{PREGAME_MIN_USD:,}", f.memory_usage(deep=True).sum() / 1e9)
     return f, mk
 
 
 def calibration_table(f: pd.DataFrame, by_sport: bool = True, phase: str | None = None) -> pd.DataFrame:
     d = f if phase is None else f[f.in_play == (phase == "in_play")]
+    d = d[d.y != .5]  # descriptive win/loss calibration only
     d = d.assign(bucket=pd.cut(d.q, EDGES, include_lowest=True, right=False))
     keys = (["sport"] if by_sport else []) + ["bucket"]
     rows = []
@@ -81,21 +83,23 @@ def calibration_table(f: pd.DataFrame, by_sport: bool = True, phase: str | None 
     return out
 
 
-def threshold_bets(f: pd.DataFrame, thr: float, mirror: bool = False) -> pd.DataFrame:
-    """First executable fill per market at/above thr (or at/below 1-thr for the mirror)."""
-    d = f[f.q <= (1 - thr)] if mirror else f[f.q >= thr]
-    if d.empty:
-        return d
-    first = d.sort_values("ts", kind="stable").groupby("m", as_index=False).head(1).copy()
-    price = first.q.to_numpy()
-    shares = STAKE / price
-    fee = taker_fee(shares, price, first.fee_rate.to_numpy())
-    payout = shares * first.y.to_numpy()
-    first["entry_price"] = price
-    first["fee_usd"] = fee
-    first["payout"] = payout
-    first["pnl_usd"] = payout - STAKE - fee
-    first["roi"] = first.pnl_usd / (STAKE + fee)
+def threshold_bets(f: pd.DataFrame, thr: float, mirror: bool = False,
+                   replay: TapeReplay | None = None) -> pd.DataFrame:
+    """One signal per market; retain every no-fill and partial in the returned audit."""
+    prior = f.prior_usd if "prior_usd" in f else pd.Series(prior_notional(f), index=f.index)
+    eligible = prior >= PREGAME_MIN_USD
+    d = f[eligible & ((f.q <= 1 - thr) if mirror else (f.q >= thr))]
+    first = d.sort_values("ts", kind="stable").drop_duplicates("m").copy()
+    orders = pd.DataFrame({"m": first.m, "s": first.s, "signal_ts": first.ts,
+                           "leader_w": first.get("w"), "event": first.event, "y": first.y,
+                           "budget_usd": STAKE})
+    orders["expiry_ts"] = np.minimum(first.get("closed_ts", first.ts + 603), first.ts + 603)
+    fills_out = (replay or TapeReplay(f)).replay(orders, event_cap_usd=STAKE)
+    first = first.reset_index(drop=True)
+    for col in fills_out:
+        if col not in ("m", "s", "event", "y"):
+            first[col] = fills_out[col].to_numpy()
+    first["entry_ts"] = first.fill_ts
     first["period"] = np.where(first.ts < SPLIT_TS, "dev", "holdout")
     first["threshold"] = thr
     first["phase"] = np.where(first.in_play, "in_play", "pregame")
@@ -104,21 +108,24 @@ def threshold_bets(f: pd.DataFrame, thr: float, mirror: bool = False) -> pd.Data
 
 def threshold_table(f: pd.DataFrame, by_sport: bool = True) -> pd.DataFrame:
     rows = []
+    replay = TapeReplay(f)
     for thr in THRESHOLDS:
         for mirror in (False, True):
-            b = threshold_bets(f, thr, mirror)
+            b = threshold_bets(f, thr, mirror, replay)
             if len(b) == 0:
                 continue
             groups = list(b.groupby("sport", observed=True)) if by_sport else [("ALL", b)]
             for sport, g in groups + ([("ALL", b)] if by_sport else []):
                 for period in ("dev", "holdout", "all"):
                     gg = g if period == "all" else g[g.period == period]
+                    signals = len(gg)
+                    gg = gg[gg.cost_usd > 0]
                     if len(gg) < 25:
                         continue
-                    mean, lo, hi = cluster_ci(gg.roi, gg.event.to_numpy(), weights=np.full(len(gg), STAKE))
+                    mean, lo, hi = cluster_ci(gg.roi, gg.event.to_numpy(), weights=gg.cost_usd.to_numpy())
                     rows.append({
                         "side": "underdog <= " + f"{1 - thr:.0%}" if mirror else "favorite >= " + f"{thr:.0%}",
-                        "threshold": thr, "sport": sport, "period": period, "bets": len(gg),
+                        "threshold": thr, "sport": sport, "period": period, "signals": signals, "bets": len(gg),
                         "avg_price": float(gg.entry_price.mean()), "won_pct": float(gg.y.mean()),
                         "edge_pts": float(gg.y.mean() - gg.entry_price.mean()),
                         "roi": mean, "ci_lo": lo, "ci_hi": hi,
@@ -168,53 +175,44 @@ def chart(cal: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
-def write_ledger(f: pd.DataFrame, thr: float, mirror: bool = False) -> None:
-    b = threshold_bets(f, thr, mirror).sort_values("ts")
-    if b.empty:
-        return
-    slug = ("underdog_at_%d" % round((1 - thr) * 100)) if mirror else ("favorite_at_%d" % round(thr * 100))
-    side = f"cheap side <= {1 - thr:.0%}" if mirror else f"first price >= {thr:.0%}"
-    rows = []
-    for i, r in enumerate(b.itertuples(index=False), 1):
-        rows.append([i, r.period, pd.to_datetime(r.ts, unit="s", utc=True).strftime("%Y-%m-%d"),
-                     r.sport, "", r.event, "", side, int(r.ts), round(float(r.entry_price), 4), STAKE,
-                     round(float(r.fee_usd), 4), "resolution", int(r.ts) + 7200, float(r.y),
-                     round(float(r.payout), 2), round(float(r.pnl_usd), 2), round(float(r.roi), 4),
-                     ("in-play" if r.in_play else "pregame") + f" crossing at {r.entry_price:.3f}"])
+def write_ledger(f: pd.DataFrame, thr: float, mirror: bool = False,
+                 bets: pd.DataFrame | None = None, replay: TapeReplay | None = None) -> None:
+    b = threshold_bets(f, thr, mirror, replay) if bets is None else bets.copy()
+    point = (1 - thr) * 100 if mirror else thr * 100
+    label = f"{point:.4f}".rstrip("0").rstrip(".").replace(".", "p")
+    slug = ("underdog_at_" if mirror else "favorite_at_") + label
+    b = b.sort_values("ts").reset_index(drop=True)
+    audit = pd.DataFrame({"id": np.arange(1, len(b) + 1), "period": b.period,
+        "date": pd.to_datetime(b.ts, unit="s", utc=True).dt.strftime("%Y-%m-%d"),
+        "sport": b.sport, "event": b.event, "market": b.m, "side": b.s,
+        "entry_ts": b.fill_ts, "entry_price": b.entry_price, "stake_usd": b.stake_usd,
+        "fee_usd": b.fee_usd, "exit_kind": "resolution", "exit_ts": b.get("closed_ts", np.nan),
+        "exit_price": b.y, "payout": b.payout, "pnl_usd": b.pnl_usd, "roi": b.roi,
+        "signal_ts": b.signal_ts, "receipt_ts": b.receipt_ts, "eligible_ts": b.eligible_ts,
+        "expiry_ts": b.expiry_ts, "shares": b.shares, "print_id": b.print_id,
+        "status": b.status, "note": "Later transaction proxy; unknown public receipt and depth"})
     head = {}
     for period, g in b.groupby("period"):
-        mean, lo, hi = cluster_ci(g.roi, g.event.to_numpy(), weights=np.full(len(g), STAKE))
-        head[period] = {"bets": int(len(g)), "roi": round(float(mean), 5), "ci_lo": round(float(lo), 5),
-                        "ci_hi": round(float(hi), 5), "pnl_usd": round(float(g.pnl_usd.sum()), 2)}
-    doc = {
-        "slug": slug,
-        "title": (f"Buy any underdog at {1 - thr:.0%} or cheaper" if mirror else f"Buy any team once it reaches {thr:.0%}"),
-        "group": "Price thresholds", "sport": "multi", "verdict": "DEAD",
-        "hypothesis": ("At some price the market stops losing: if teams priced at " +
-                       (f"{1 - thr:.0%} or less" if mirror else f"{thr:.0%} or more") +
-                       " win more often than that price implies, buying every one of them pays."),
-        "mechanism": ("Favourite-longshot effects: bettors may overpay for near-certainties (or for longshot "
-                      "lottery tickets), leaving the other side underpriced."),
-        "entry_rule": (f"The first executable fill in each market at {'or below ' + format(1 - thr, '.0%') if mirror else 'or above ' + format(thr, '.0%')}"
-                       " (a taker really traded there), $100 flat, one bet per market, pregame or in-play."),
-        "exit_rule": "Held to resolution.",
-        "cost_model": "Polymarket taker fee at the market's own rate (0 in 2025, 3% Mar-Jun 2026, 5% since Jul 2026).",
-        "periods": {"dev": "2025-01-01..2026-06-30", "holdout": "2026-07-01..2026-09-18"},
-        "review": "",
-        "caveats": ["Markets selected on pregame volume only (>= $25k), never total volume.",
-                    "Entry is the first print at the threshold; a real order would queue behind it.",
-                    "Voids (payout 0.5) are excluded."],
-        "report_path": "reports/CALIBRATION.md", "code_path": "pmsports/analysis/calibration.py",
-        "truncated": False, "n_total_trades": len(rows),
-        "headline": head,
-        "columns": ["id", "period", "date", "sport", "league", "event", "market", "side", "entry_ts",
-                    "entry_price", "stake_usd", "fee_usd", "exit_kind", "exit_ts", "exit_price", "payout",
-                    "pnl_usd", "roi", "note"],
-        "rows": rows,
-    }
+        filled = g[g.cost_usd > 0]
+        mean, lo, hi = cluster_ci(filled.roi, filled.event.to_numpy(), weights=filled.cost_usd.to_numpy()) if len(filled) else (np.nan,) * 3
+        head[period] = dict(signals=len(g), bets=len(filled), roi=mean, ci_lo=lo, ci_hi=hi,
+                            pnl_usd=float(filled.pnl_usd.sum()), capital_usd=float(filled.cost_usd.sum()))
+    doc = dict(slug=slug, title=f"{'Underdog' if mirror else 'Favorite'} threshold {thr:.0%}",
+        group="Price thresholds", sport="multi", verdict="UNVALIDATED",
+        hypothesis="Threshold-conditioned settlement return after delayed size-bounded entry",
+        mechanism="Price calibration", entry_rule="First threshold signal per market; first later same-side other-wallet print after3s; inclusive$100/event cap; first-print partial fills",
+        exit_rule="Settlement; expiry idealizes order eligibility and does not model pending-order cancellation",
+        cost_model="Historical fill fee; budget includes fees", periods={"dev":"before2026-07-01", "holdout":"historically explored2026-07 onward"},
+        caveats=["Observed cumulative volume strictly before signal >=$50k; incomplete lifetime coverage", "Tape capacity is not resting order-book depth", "Historical receipt timestamp is unobserved", "No-fill signals included with zero capital and PnL"],
+        report_path="reports/CALIBRATION_POINTS.md", code_path="pmsports/analysis/calibration.py",
+        truncated=False, n_total_trades=len(audit), headline=head, columns=list(audit),
+        rows=json.loads(audit.to_json(orient="values")))
+    # pandas handles missing values uniformly, including empty strategies.
+    doc["headline"] = json.loads(pd.Series(head).to_json())
     LEDGERS.mkdir(parents=True, exist_ok=True)
-    (LEDGERS / f"{slug}.json").write_text(json.dumps(doc, separators=(",", ":")))
-    log.info("ledger %s: %d bets", slug, len(rows))
+    tmp = LEDGERS / f"{slug}.json.tmp"
+    tmp.write_text(json.dumps(doc, separators=(",", ":"), allow_nan=False))
+    tmp.replace(LEDGERS / f"{slug}.json")
 
 
 def run() -> None:
@@ -230,9 +228,10 @@ def run() -> None:
                      ("calibration_thresholds", thr)]:
         df.to_csv(REPORTS / f"{name}.csv", index=False)
     chart(cal_all, REPORTS / "calibration_curve.png")
-    for t in (0.90, 0.95, 0.99):
-        write_ledger(f, t)
-    write_ledger(f, 0.90, mirror=True)
+    replay = TapeReplay(f)
+    for t in THRESHOLDS:
+        for mirror in (False, True):
+            write_ledger(f, t, mirror=mirror, replay=replay)
     (REPORTS / "CALIBRATION.md").write_text(_render(f, overall, cal_all, cal_pre, cal_live, thr))
     log.info("wrote %s", REPORTS / "CALIBRATION.md")
 
@@ -247,8 +246,8 @@ def _render(f, overall, cal, pre, live, thr) -> str:
     top = thr[(thr.period == "holdout") & (thr.sport == "ALL")]
     L = ["# The breaking point: price vs. reality, by sport", "",
          f"Every taker fill in {f.m.nunique():,} sports markets ({len(f):,} fills, 2025-01..2026-09), where the "
-         "price paid is known and the outcome is known. Markets are selected on PREGAME volume only "
-         f"(>= ${PREGAME_MIN_USD:,}), never on total volume, which is outcome-correlated. Voids excluded.",
+         "price paid and outcomes are known. Legacy collection is incomplete and selected by eventual volume. "
+         f"Trading sensitivity uses >=${PREGAME_MIN_USD:,} observed strictly before each signal. Strategy voids settle at actual payout.",
          "",
          "`won_pct` is dollar-weighted: of every $1 spent at that price, how much came back as a winner. "
          "`edge_pts` = won_pct - avg_price (positive means the side won more often than it cost). "
@@ -259,9 +258,9 @@ def _render(f, overall, cal, pre, live, thr) -> str:
          "## 2. By sport (all fills, pregame and in-play)", "", _md(cal, ["sport"] + CAL_COLS), "",
          "## 3. Pregame only", "", _md(pre, ["sport"] + CAL_COLS), "",
          "## 4. In-play only", "", _md(live, ["sport"] + CAL_COLS), "",
-         "## 5. The tradable version: buy the first price at or beyond a threshold", "",
-         "One bet per market at the first executable print at/above the threshold (or at/below its mirror), "
-         "$100 flat, held to resolution, actual fees. `dev` is before 2026-07-01, `holdout` after.", "",
+         "## 5. Delayed transaction-proxy threshold replay", "",
+         "First crossing signals an order; a later same-side other-wallet print after3s caps shares. "
+         "$100/event inclusive fees; partial and no-fill retained. July2026 is historically explored, not fresh confirmation.", "",
          _md(thr[thr.sport == "ALL"], ["side", "threshold", "period", "bets", "avg_price", "won_pct",
                                         "edge_pts", "roi", "ci_lo", "ci_hi", "in_play_share"]), "",
          "### Per sport (holdout)", "",
@@ -311,42 +310,29 @@ def per_point_split(f: pd.DataFrame) -> pd.DataFrame:
 
 
 def _records(f: pd.DataFrame) -> pd.DataFrame:
-    """The fills a threshold rule could enter on: each market's first fill at each new high price."""
-    order = np.lexsort((f.ts.to_numpy(), f.m.to_numpy()))
-    m = f.m.to_numpy()[order]
-    q = f.q.to_numpy()[order]
-    run = pd.Series(q).groupby(pd.Series(m), sort=False).cummax().to_numpy()   # running max within market
-    prev = np.r_[-1.0, run[:-1]]
-    first_of_market = np.r_[True, m[1:] != m[:-1]]
-    keep = first_of_market | (q > prev)
-    return f.iloc[order[keep]].copy()
+    """Eligible record-high SIGNALS only; execution must still use the complete tape."""
+    prior = f.prior_usd if "prior_usd" in f else pd.Series(prior_notional(f), index=f.index)
+    d = f[prior >= PREGAME_MIN_USD].sort_values(["m", "ts"], kind="stable")
+    prev = d.groupby("m", sort=False).q.cummax().groupby(d.m).shift()
+    return d[prev.isna() | d.q.gt(prev)].copy()
 
 
-def threshold_sweep(f: pd.DataFrame, points=range(50, 100)) -> pd.DataFrame:
-    """Buy the first executable print at or above T, one bet per market, for every T."""
-    rec = _records(f)
+def threshold_sweep(f: pd.DataFrame, points=range(50, 100), export_ledgers=False) -> pd.DataFrame:
+    """Every threshold uses the identical chronological execution path, full audits optional."""
+    replay = TapeReplay(f)
     rows = []
     for pt in points:
-        thr = pt / 100.0
-        d = rec[rec.q >= thr]
-        if d.empty:
-            continue
-        first = d.groupby("m", observed=True).head(1)
-        price = first.q.to_numpy()
-        shares = STAKE / price
-        fee = taker_fee(shares, price, first.fee_rate.to_numpy())
-        pnl = shares * first.y.to_numpy() - STAKE - fee
-        roi = pnl / (STAKE + fee)
-        per = np.where(first.ts.to_numpy() < SPLIT_TS, "dev", "holdout")
+        first = threshold_bets(f, pt / 100., replay=replay)
+        if export_ledgers:
+            write_ledger(f, pt / 100., bets=first)
         for period in ("dev", "holdout"):
-            mask = per == period
-            if mask.sum() < 25:
-                continue
-            mean, lo, hi = cluster_ci(roi[mask], first.event.to_numpy()[mask])
-            rows.append({"threshold_pct": pt, "period": period, "bets": int(mask.sum()),
-                         "avg_price": float(price[mask].mean()), "won_pct": float(first.y.to_numpy()[mask].mean()),
-                         "edge_pts": float(first.y.to_numpy()[mask].mean() - price[mask].mean()),
-                         "roi": mean, "ci_lo": lo, "ci_hi": hi, "pnl_usd": float(pnl[mask].sum())})
+            signals = first[first.period == period]
+            g = signals[signals.cost_usd > 0]
+            mean, lo, hi = cluster_ci(g.roi, g.event.to_numpy(), weights=g.cost_usd.to_numpy()) if len(g) else (np.nan,) * 3
+            rows.append(dict(threshold_pct=pt, period=period, signals=len(signals), bets=len(g),
+                unfilled=int((signals.cost_usd == 0).sum()), partial=int((signals.status == "partial").sum()),
+                avg_price=g.entry_price.mean(), won_pct=g.y.mean(), edge_pts=(g.y - g.entry_price).mean(),
+                roi=mean, ci_lo=lo, ci_hi=hi, pnl_usd=g.pnl_usd.sum(), capital_usd=g.cost_usd.sum()))
     return pd.DataFrame(rows)
 
 
@@ -385,7 +371,7 @@ def run_points() -> None:
     f, _ = _load()
     pts = per_point(f)
     split = per_point_split(f)
-    sweep = threshold_sweep(f)
+    sweep = threshold_sweep(f, export_ledgers=True)
     by_sport = per_point(f, by="sport", min_fills=300)
     for name, df in [("points_all", pts), ("points_dev_holdout", split),
                      ("points_threshold_sweep", sweep), ("points_by_sport", by_sport)]:
@@ -406,32 +392,23 @@ def _render_points(f, pts, split, sweep, by_sport, survivors) -> str:
     sp_cols = ["pt", "roi_dev", "ci_lo_dev", "ci_hi_dev", "roi_hold", "ci_lo_hold", "ci_hi_hold", "both_positive"]
     pos = split[split.both_positive]
     L = ["# Every price point from 50c: is there a sweet spot?", "",
-         f"{len(f):,} fills, {f.m.nunique():,} markets (selected on pregame volume only). Each row is one "
+         f"{len(f):,} fills, {f.m.nunique():,} markets (legacy corpus with incomplete lifetime coverage). Each row is one "
          "cent of price. `roi` is the return per $1 after the market's actual taker fee, with a 95% CI "
          "clustered by game.", "",
          "![points](calibration_points.png)", "",
          "## Every point, all sports", "", _md(pts, cols, ".4f"), "",
-         "## The out-of-sample filter", "",
-         "A real sweet spot has to work in both windows. Development is before 2026-07-01, holdout after.", "",
+         "## The historically explored split", "",
+         "Development is before2026-07-01; the later window has already been inspected and is not fresh confirmation.", "",
          _md(split, sp_cols, ".4f"), "",
          f"Points positive in BOTH windows: **{len(pos)} of {len(split)}** "
          f"({', '.join(str(int(p)) + 'c' for p in pos.pt) if len(pos) else 'none'}).", "",
          f"Points whose own CI clears zero after correcting for testing {len(pts)} of them: "
          f"**{len(survivors)}**.", "",
-         "### Why the 74-75c spike is not a sweet spot", "",
-         "The dollar-weighted table shows +6.8% at 74-75c, positive in both windows. It does not survive "
-         "the only weighting that matters for trading - one bet per market:", "",
-         "| how the same 726,623 fills at 74-75c are weighted | return per $1 |",
-         "|---|---|",
-         "| dollar-weighted (the table above) | **+6.8%** [+2.8, +10.4] |",
-         "| equal-weighted per fill | +0.8% [-1.8, +3.2] |",
-         "| one bet per market (what you could actually trade) | **-0.4%** [-1.4, +0.5] |",
-         "| fills of $1,000 or more only | +2.7% [-0.3, +5.5] |", "",
-         "The median fill there is $11 and the largest 1% of fills carry 56% of the dollars, so the "
-         "dollar-weighted number is a handful of big tickets in a handful of games, repeated across many "
-         "fills of the same market. Buying the first print in a 73-76c band and holding loses in both "
-         "windows (dev -0.7%, holdout -1.0%), as does every 'buy once it crosses T' threshold from 50c to "
-         "99c (see the sweep).", "",
-         "## Tradable: buy the first print at or above each threshold", "", _md(sweep, None, ".4f"), "",
+         "### What different weights mean", "",
+         "Dollar weighting is descriptive of historical tickets. Equal-dollar, proportional, and one-per-event "
+         "policies are each legitimate if weights are known at signal time and exposure and capacity are enforced. "
+         "The whale replay separately evaluates prespecified74/75c and73/76c comparator bands. "
+         "Positive historical estimates remain unexplained and unvalidated pending new observations.", "",
+         "## Causal delayed size-bounded threshold replay", "", _md(sweep, None, ".4f"), "",
          "## By sport", "", _md(by_sport, ["sport"] + cols, ".4f"), ""]
     return "\n".join(L)

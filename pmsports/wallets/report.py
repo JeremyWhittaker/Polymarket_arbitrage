@@ -53,7 +53,8 @@ def get_code_hash():
     h = hashlib.sha256()
     parent = Path(__file__).parent
     deps = [parent / "study.py", parent / "skill.py", parent / "report.py",
-            parent / "tapes.py", parent / "universe.py", parent.parent / "polymarket.py"]
+            parent / "tapes.py", parent / "universe.py", parent.parent / "polymarket.py",
+            parent.parent / "execution.py"]
     for p in deps:
         if p.exists():
             h.update(p.read_bytes())
@@ -215,4 +216,3 @@ def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None, run_id="") -
               "on-chain volume traded as taker (CryptoHouse OrderFilled events). Makers earn the spread and "
               "rebates; their edge cannot be copied by a taker.", "", _md(g, ".4f"), ""]
     return "\n".join(L)
-

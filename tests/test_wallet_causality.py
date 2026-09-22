@@ -53,6 +53,7 @@ def test_causality_boundary_walk_forward(monkeypatch):
         {"timestamp": ts1, "condition_id": "c1", "proxyWallet": "w1", "size": 10.0, "side_idx": 0, "q": 0.5, "y": 1.0, "fee_rate": 0.0, "in_play": False, "family": "soccer", "event_slug": "e1"},
         {"timestamp": ts2, "condition_id": "c2", "proxyWallet": "w1", "size": 10.0, "side_idx": 0, "q": 0.5, "y": 0.0, "fee_rate": 0.0, "in_play": False, "family": "soccer", "event_slug": "e2"},
         {"timestamp": ts3, "condition_id": "c3", "proxyWallet": "w1", "size": 10.0, "side_idx": 0, "q": 0.5, "y": 1.0, "fee_rate": 0.0, "in_play": False, "family": "soccer", "event_slug": "e3"},
+        {"timestamp": ts3 + 1, "condition_id": "c3", "proxyWallet": "w2", "size": 10.0, "side_idx": 0, "q": 0.55, "y": 1.0, "fee_rate": 0.0, "in_play": False, "family": "soccer", "event_slug": "e3"},
     ]
     t = pd.DataFrame(t_rows)
     for c in ["condition_id", "proxyWallet", "family", "event_slug"]:
@@ -72,10 +73,20 @@ def test_causality_boundary_walk_forward(monkeypatch):
 
     # study.walk_forward needs a bit more rows, but we can lower TOP_K and MIN_MKTS by monkeypatching
     monkeypatch.setattr(study, "MIN_MKTS", 1)
-    res = study.walk_forward(t, start="2025-01-01", end="2025-03-01", lookback_days=30, rules=("z",), delays=(0,), meta=meta)
+    ranked = []
+    original = study.skill.positions
+    def capture_ranked(frame):
+        ranked.append(frame.copy())
+        return original(frame)
+    monkeypatch.setattr(study.skill, "positions", capture_ranked)
+    res = study.walk_forward(t, start="2025-01-01", end="2025-03-01", lookback_days=30, rules=("z", "whales"), delays=(0,), meta=meta)
 
-    assert len(res) == 1
-    # Only c1 was used for ranking, because c2 closed after Feb 1.
+    assert len(res) == 2
+    assert len(ranked) == 1 and ranked[0].condition_id.astype(str).tolist() == ["c1"]
+    # Equal independent policies get equal capacity; they do not compete with one another.
+    assert res.staked.tolist() == [5.5, 5.5]
+    assert res.trades.tolist() == [1, 1]
+    assert res["pnl_per_$1"].tolist() == [4.5, 4.5]
 
 def test_cache_invalidation(monkeypatch):
     import shutil
@@ -102,3 +113,10 @@ def test_cache_invalidation(monkeypatch):
         assert man1["inputs"][u_key]["size"] != man2["inputs"][u_key]["size"]
         assert man1 != man2
 
+def test_cache_hash_includes_shared_execution(monkeypatch, tmp_path):
+    wallet_dir=tmp_path/'wallets'; wallet_dir.mkdir()
+    monkeypatch.setattr(report,'__file__',str(wallet_dir/'report.py'))
+    source=tmp_path/'execution.py'; source.write_text('version=1')
+    first=report.get_code_hash()
+    source.write_text('version=2')
+    assert report.get_code_hash()!=first

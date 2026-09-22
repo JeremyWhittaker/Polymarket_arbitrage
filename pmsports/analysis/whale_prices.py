@@ -1,49 +1,27 @@
-"""Does big money win at particular price levels, and could a follower ride it?
+"""Prespecified74/75c whale lead versus73/76c comparator; historical tape sensitivity.
 
-python -m pmsports.analysis.whale_prices  ->  reports/whale_prices.csv
-
-Why this exists: the dollar-weighted calibration table shows +6.8% at 74-75c, but one bet per
-market at those prices returns -0.4%. The gap is that the dollars belong to a few thousand large
-tickets. This module asks the follow-up directly: at each price level, how do fills of >= $10k do,
-does a follower entering seconds later capture it, and does an ordinary-sized fill at the same
-price do the same (the placebo)?
-
-Result as of 2026-09: positive only at exactly 74c and 75c (+10.6% / +7.1%, in both development
-and holdout), flat or negative at 73c, 76c, 77c, 80c, 85c, 90c, 95c, with no structural difference
-(negRisk share, in-play share, ticket size, leagues and months all look ordinary). An effect that
-switches on at 74c and off at 73c is an anomaly to investigate, NOT an edge to trade.
+These previously inspected windows cannot establish a fresh confirmatory edge.
+Every selected signal is retained, including no-fill and event-cap exclusions.
 """
 from __future__ import annotations
-
-import logging
+import json
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
-
 from ..polymarket import taker_fee
-from ..research.common import cluster_ci, fills, markets
+from ..execution import TapeReplay
+from ..research.common import cluster_ci
+from .calibration import _load, SPLIT_TS, LEDGERS
 
-log = logging.getLogger("pmsports")
 REPORTS = Path(__file__).resolve().parents[2] / "reports"
-SPLIT_TS = pd.Timestamp("2026-07-01", tz="UTC").timestamp()
 STAKE = 100.0
 WHALE_USD = 10_000
-SMALL_USD = 1_000
-PRICES = [0.60, 0.65, 0.70, 0.72, 0.73, 0.74, 0.75, 0.76, 0.77, 0.78, 0.80, 0.85, 0.90, 0.95]
+PRICES = [.73, .74, .75, .76]
 
 
 def load() -> pd.DataFrame:
-    mk = markets()
-    mk = mk[(mk.pre_usd.fillna(0) >= 25_000) & mk.game_start_ts.notna()]
-    f = fills(markets=mk.m.to_numpy(), columns=["m", "ts", "q", "y", "s", "size", "fee_rate", "in_play"])
-    f = f[(f.y != 0.5) & f.q.between(0.02, 0.995)]
-    meta = mk.set_index("m")
-    pos = pd.Series(np.arange(len(meta)), index=meta.index)
-    row = pos.reindex(f.m).to_numpy()
-    f = f.assign(ev=pd.factorize(meta.event_slug.to_numpy())[0][row].astype(np.int32),
-                 usd=(f["size"] * f.q).to_numpy())
-    return f.sort_values(["m", "s", "ts"], kind="stable").reset_index(drop=True)
+    f, _ = _load()
+    return f.assign(ev=f.event, usd=f["size"] * f.q).reset_index(drop=True)
 
 
 def _roi(q, y, rate):
@@ -51,74 +29,90 @@ def _roi(q, y, rate):
     return (y - q - fee) / (q + fee)
 
 
-def follower_entries(f: pd.DataFrame, signal: np.ndarray, delay: int = 3, horizon: int = 600) -> np.ndarray:
-    """Index of the next fill on the same market+side at least `delay` seconds after each signal."""
-    key = f.m.to_numpy().astype(np.int64) * 2 + f.s.to_numpy()
-    ts = f.ts.to_numpy()
-    start = np.searchsorted(key, key, side="left")
-    end = np.searchsorted(key, key, side="right")
-    out = []
-    for i in signal:
-        a, b = start[i], end[i]
-        j = a + np.searchsorted(ts[a:b], ts[i] + delay, side="left")
-        if j < b and ts[j] - ts[i] <= horizon:
-            out.append(j)
-    return np.array(out, dtype=int)
+def follower_entries(f: pd.DataFrame, signal: np.ndarray, delay: int = 3, horizon: int = 600,
+                     proportional=False, replay=None, slip=0.0) -> pd.DataFrame:
+    """Full signal-to-fill mapping; each invocation is one capacity/exposure replay."""
+    sig = f.iloc[signal].copy()
+    budget = np.minimum(STAKE, .001 * sig.usd) if proportional else np.full(len(sig), STAKE)
+    orders = pd.DataFrame({"m": sig.m, "s": sig.s, "signal_ts": sig.ts,
+        "leader_w": sig.w, "event": sig.ev, "y": sig.y, "budget_usd": budget,
+        "expiry_ts": np.minimum(sig.closed_ts, sig.ts + delay + horizon)})
+    out = (replay or TapeReplay(f)).replay(orders, delay_s=delay, horizon_s=horizon,
+                                         event_cap_usd=STAKE, slip=slip)
+    out["signal_row"] = signal
+    out["signal_price"] = sig.q.to_numpy()
+    out["leader_notional"] = sig.usd.to_numpy()
+    out["sport"] = sig.sport.to_numpy()
+    out["period"] = np.where(sig.ts.to_numpy() < SPLIT_TS, "dev", "holdout")
+    return out
 
 
-def table(f: pd.DataFrame, tol: float = 0.005) -> pd.DataFrame:
-    q, y, fr, ts, ev, usd = (f.q.to_numpy(), f.y.to_numpy(), f.fee_rate.to_numpy(),
-                             f.ts.to_numpy(), f.ev.to_numpy(), f.usd.to_numpy())
-    rng = np.random.default_rng(0)
-    rows = []
-    for price in PRICES:
-        at = np.abs(q - price) <= tol
-        for label, sel in (("whale", at & (usd >= WHALE_USD)), ("placebo", at & (usd < SMALL_USD))):
-            idx = np.flatnonzero(sel)
-            if label == "placebo" and len(idx) > 6000:
-                idx = np.sort(rng.choice(idx, 6000, replace=False))
-            if len(idx) < 60:
-                continue
-            roi = _roi(q[idx], y[idx], fr[idx])
-            m, lo, hi = cluster_ci(roi, ev[idx])
-            rec = {"price": price, "who": label, "fills": len(idx), "games": int(pd.unique(ev[idx]).size),
-                   "won_pct": float(y[idx].mean()), "roi": m, "ci_lo": lo, "ci_hi": hi}
-            for per, mask in (("dev", ts[idx] < SPLIT_TS), ("holdout", ts[idx] >= SPLIT_TS)):
-                if mask.sum() >= 40:
-                    mm, _, _ = cluster_ci(roi[mask], ev[idx][mask])
-                    rec[f"roi_{per}"] = mm
-                    rec[f"bets_{per}"] = int(mask.sum())
-            if label == "whale":                       # can a follower ride it, entering 3s later?
-                e = follower_entries(f, idx)
-                if len(e) >= 60:
-                    fr_roi = _roi(q[e], y[e], fr[e])
-                    fm, flo, fhi = cluster_ci(fr_roi, ev[e])
-                    rec.update({"follower_bets": len(e), "follower_roi": fm,
-                                "follower_ci_lo": flo, "follower_ci_hi": fhi})
-            rows.append(rec)
-    return pd.DataFrame(rows)
+def table(f: pd.DataFrame, tol: float = .005, return_audit=False):
+    """No new price search: two prespecified bands, two causal exposure policies."""
+    replay = TapeReplay(f)
+    rows, audits = [], []
+    for band, prices in (("primary74_75", (.74, .75)), ("comparator73_76", (.73, .76))):
+        at = np.logical_or.reduce([np.abs(f.q.to_numpy() - p) <= tol for p in prices])
+        idx = np.flatnonzero(at & (f.usd >= WHALE_USD) & (f.prior_usd >= 50_000))
+        for policy in ("one_per_event", "capped_proportional"):
+            use = idx
+            if policy == "one_per_event":
+                use = f.iloc[idx].assign(_row=idx).sort_values("ts", kind="stable").drop_duplicates("ev")._row.to_numpy()
+            for slip in (0., .01):
+                a = follower_entries(f, use, proportional=policy == "capped_proportional", replay=replay, slip=slip)
+                a["band"], a["policy"], a["slip"] = band, policy, slip
+                audits.append(a)
+                for per in ("dev", "holdout"):
+                    signals = a[a.period == per]
+                    g = signals[signals.cost_usd > 0]
+                    m, lo, hi = cluster_ci(g.roi, g.event.to_numpy(), weights=g.cost_usd.to_numpy()) if len(g) else (np.nan,) * 3
+                    game = g.groupby("event").agg(pnl=("pnl_usd", "sum"), capital=("cost_usd", "sum"))
+                    rows.append(dict(band=band, policy=policy, slip=slip, period=per, signals=len(signals),
+                        bets=len(g), games=len(game), unfilled=int((signals.cost_usd == 0).sum()),
+                        partial=int(signals.status.eq("partial").sum()), roi=m, ci_lo=lo, ci_hi=hi,
+                        capital_usd=g.cost_usd.sum(), pnl_usd=g.pnl_usd.sum(), shares=g.shares.sum(),
+                        max_game_capital_share=game.capital.max() / game.capital.sum() if len(game) else np.nan,
+                        top5_game_pnl=game.pnl.nlargest(5).sum(), median_allocated_usd=g.cost_usd.median()))
+    result = pd.DataFrame(rows)
+    return (result, pd.concat(audits, ignore_index=True)) if return_audit else result
 
 
 def run() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     f = load()
-    t = table(f)
+    t, audit = table(f, return_audit=True)
     REPORTS.mkdir(exist_ok=True)
     t.to_csv(REPORTS / "whale_prices.csv", index=False)
+    audit.to_parquet(REPORTS / "whale_signal_audit.parquet", index=False)
+    ev_table(f).to_csv(REPORTS / "expected_value_by_price.csv", index=False)
+    for (band, policy, slip), g in audit.groupby(["band", "policy", "slip"]):
+        g = g.copy().sort_values("signal_ts")
+        g["id"] = np.arange(1, len(g) + 1)
+        g["entry_ts"] = g.fill_ts
+        g["exit_kind"] = "resolution"
+        g["note"] = "Historical later-print proxy; public receipt and depth unknown"
+        slug = f"whale_{band}_{policy}_{int(slip * 100)}c"
+        doc = dict(slug=slug, title=f"Whale {band} {policy} +{slip:.0%}", group="Whale signals",
+            sport="multi", verdict="UNVALIDATED", entry_rule="3s delayed other-wallet acquired-side print; prior observed volume50k; first-print partial;100/event including fee",
+            exit_rule="Settlement", cost_model="Actual historical fee plus specified price sensitivity",
+            caveats=["Incomplete lifetime tapes", "July2026 was already explored", "No-fill signals are zero-capital audit rows", "Proportional policy:0.1% of observable leader notional capped100"],
+            columns=list(g), rows=json.loads(g.to_json(orient="values")), truncated=False, n_total_trades=len(g),
+            report_path="reports/WHALE_REPAIRED.md", code_path="pmsports/analysis/whale_prices.py")
+        LEDGERS.mkdir(exist_ok=True, parents=True)
+        tmp = LEDGERS / f"{slug}.json.tmp"
+        tmp.write_text(json.dumps(doc, separators=(",", ":"), allow_nan=False))
+        tmp.replace(LEDGERS / f"{slug}.json")
+    (REPORTS / "WHALE_REPAIRED.md").write_text("# Whale signal repair\n\n" +
+        "Prespecified74/75c versus73/76c; >=$10k leader ticket and >=$50k strictly prior observed volume. " +
+        "Signal receipt is approximated by transaction timestamp; actual public delay and book depth are unknown. " +
+        "Each policy has100 inclusive-dollar lifetime exposure per event. Proportional stakes are0.1% of observed leader notional capped100. " +
+        "All signals, partials and no-fills are preserved in whale_signal_audit.parquet and desk ledgers. " +
+        "July2026 is historically explored, so these results cannot confirm a new edge.\n\n" +
+        t.to_markdown(index=False, floatfmt=".4f") + "\n")
     print(t.round(4).to_string(index=False))
-    e = ev_table(f)
-    e.to_csv(REPORTS / "expected_value_by_price.csv", index=False)
-    print("\nExpected value per price (one bet per game, after fees):")
-    print(e.round(3).to_string(index=False))
-    pos = e[(e.ev_per_100usd > 0) & (e.ci_lo > 0)]
-    print(f"prices with positive EV and a CI clear of zero: {pos.price_c.tolist() or 'none'}; "
-          f"average EV per $100 = ${e.ev_per_100usd.mean():.2f}")
-
-
 
 
 def ev_table(f: pd.DataFrame) -> pd.DataFrame:
-    """Thorp-style expected value per price: EV = P(win)*$1 - (price + fee), one bet per game."""
+    """DESCRIPTIVE settlement calibration at the signal print, not a follower return."""
     q, y, fr, ev, m, ts = (f.q.to_numpy(), f.y.to_numpy(), f.fee_rate.to_numpy(),
                            f.ev.to_numpy(), f.m.to_numpy(), f.ts.to_numpy())
     pt = np.floor(q * 100).astype(int)

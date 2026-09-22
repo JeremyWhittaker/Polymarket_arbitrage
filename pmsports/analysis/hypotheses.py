@@ -11,6 +11,9 @@ H4 latency       After a scoring play (ball in play), how many seconds until the
 """
 from __future__ import annotations
 
+from ..execution import panel_entries
+from ..research.common import cluster_ci
+
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
@@ -68,6 +71,7 @@ def h1_calibration(pregame: pd.DataFrame, slip: float = 0.01) -> dict:
         "fav_win_rate": float(df.fav_won.mean()), "fav_avg_price": float(df.fav_p.mean()),
         "table": t.reset_index(),
         "strategies": pd.DataFrame(strategies),
+        "execution_note": "Descriptive pregame-price calibration and synthetic cost sensitivities; no available quote/size is established.",
         "by_season": df.assign(season=df.event_date.str[:4]).groupby("season").agg(
             games=("won", "size"), fav_price=("fav_p", "mean"), fav_win=("fav_won", "mean")).reset_index(),
     }
@@ -160,7 +164,7 @@ def h3_fair_value(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str,
     """Out-of-sample: fit P(home wins | pregame price, state) on games before split_date,
     then trade games on/after it whenever the model and market disagree by > threshold."""
     df = panel.dropna(subset=["mkt_p", "pre_p", "home_won_final"]).copy()
-    df = df[df.pre_p.between(0.02, 0.98)]
+    df = df[df.pre_p.between(0.02, 0.98) & df.mkt_staleness.le(120)]
     split_season = int(split_date[:4])
     df["we"] = _baseline_we(baseline, df, max_season=split_season - 1)
     df["y"] = df.home_won_final.astype(float)
@@ -175,7 +179,7 @@ def h3_fair_value(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str,
     test["model_p"] = model.predict(sm.add_constant(_features(test)[cols], has_constant="add"))
 
     scores = pd.DataFrame([
-        {"predictor": "market price (60s after play)", "log_loss": log_loss(test.y, test.mkt_p), "brier": brier(test.y, test.mkt_p)},
+        {"predictor": "causal pre-decision transaction reference", "log_loss": log_loss(test.y, test.mkt_p), "brier": brier(test.y, test.mkt_p)},
         {"predictor": "model (pregame price + state)", "log_loss": log_loss(test.y, test.model_p), "brier": brier(test.y, test.model_p)},
         {"predictor": "baseline win expectancy only", "log_loss": log_loss(test.y, test.we), "brier": brier(test.y, test.we)},
         {"predictor": "pregame price only", "log_loss": log_loss(test.y, test.pre_p), "brier": brier(test.y, test.pre_p)},
@@ -193,15 +197,14 @@ def h3_fair_value(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str,
         sig = test[test.edge_home.abs() > thr].sort_values("state_ts")
         first = sig.groupby("game_pk").head(1)        # one bet per game: avoid counting one mispricing 20x
         buy_home = first.edge_home > 0
-        price = np.where(buy_home, first.mkt_p, 1 - first.mkt_p)
-        won = np.where(buy_home, first.y, 1 - first.y)
-        for fee_label, rate in [("no fee", 0.0), ("5% sports fee", CURRENT_FEE)]:
-            r = bet_pnl(price, won, rate, slip)
-            ci = bootstrap_mean(r.roi)
-            rows.append({"threshold": thr, "fee": fee_label, "bets": len(r), "win_rate": float(np.mean(won)) if len(r) else np.nan,
-                         "avg_price_paid": float(r.cost.mean()) if len(r) else np.nan,
-                         "roi_per_$": float(r.roi.mean()) if len(r) else np.nan,
-                         "roi_ci95": f"{ci[0]:+.3f} to {ci[1]:+.3f}"})
+        r = panel_entries(first, buy_home, slip=slip)
+        g = r[r.cost_usd > 0]
+        mean, lo, hi = cluster_ci(g.roi, g.event.to_numpy(), weights=g.cost_usd.to_numpy()) if len(g) else (np.nan,) * 3
+        rows.append({"threshold": thr, "fee": "historical actual", "signals": len(r), "bets": len(g),
+                     "unfilled": int((r.cost_usd == 0).sum()), "partial": int(r.status.eq("partial").sum()),
+                     "win_rate": g.y.mean(), "avg_price_paid": g.entry_price.mean(),
+                     "capital_usd": g.cost_usd.sum(), "pnl_usd": g.pnl_usd.sum(),
+                     "roi_per_$": mean, "roi_ci95": f"{lo:+.3f} to {hi:+.3f}"})
 
     # the user's literal idea: "trade to the average" market price for the state
     naive = _naive_state_average(train, test, slip)
@@ -210,7 +213,8 @@ def h3_fair_value(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str,
             "coef": model.params.to_frame("coef").join(model.bse.rename("se")),
             "stack_coef_market": float(stack.params[1]), "stack_coef_model_minus_market": float(stack.params[2]),
             "stack_se_model_minus_market": float(stack.bse[2]),
-            "backtest": pd.DataFrame(rows), "naive": naive}
+            "backtest": pd.DataFrame(rows), "naive": naive,
+            "execution_note": "Optimistic5s from retrospective state clock; receipt latency and actual book unknown. Settlement exits only; no literal mean-reversion exit tested."}
 
 
 def _naive_state_average(train: pd.DataFrame, test: pd.DataFrame, slip: float) -> pd.DataFrame:
@@ -229,15 +233,15 @@ def _naive_state_average(train: pd.DataFrame, test: pd.DataFrame, slip: float) -
         dev = (t.mkt_p - t["mean"]) / t["std"]
         sig = t[dev.abs() > k].sort_values("state_ts").groupby("game_pk").head(1)
         buy_home = sig.mkt_p < sig["mean"]    # price below the state's average -> buy home
-        price = np.where(buy_home, sig.mkt_p, 1 - sig.mkt_p)
-        won = np.where(buy_home, sig.y, 1 - sig.y)
-        for fee_label, rate in [("no fee", 0.0), ("5% sports fee", CURRENT_FEE)]:
-            r = bet_pnl(price, won, rate, slip)
-            ci = bootstrap_mean(r.roi)
-            rows.append({"k_std": k, "fee": fee_label, "bets": len(r), "win_rate": float(np.mean(won)) if len(r) else np.nan,
-                         "avg_price_paid": float(r.cost.mean()) if len(r) else np.nan,
-                         "roi_per_$": float(r.roi.mean()) if len(r) else np.nan,
-                         "roi_ci95": f"{ci[0]:+.3f} to {ci[1]:+.3f}"})
+        r = panel_entries(sig, buy_home, slip=slip)
+        g = r[r.cost_usd > 0]
+        mean, lo, hi = cluster_ci(g.roi, g.event.to_numpy(), weights=g.cost_usd.to_numpy()) if len(g) else (np.nan,) * 3
+        rows.append({"k_std": k, "fee": "historical actual", "signals": len(r), "bets": len(g),
+                     "unfilled": int((r.cost_usd == 0).sum()), "win_rate": g.y.mean(),
+                     "avg_price_paid": g.entry_price.mean(), "capital_usd": g.cost_usd.sum(),
+                     "pnl_usd": g.pnl_usd.sum(), "roi_per_$": mean,
+                     "roi_ci95": f"{lo:+.3f} to {hi:+.3f}"})
+
     return pd.DataFrame(rows)
 
 

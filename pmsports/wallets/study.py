@@ -218,13 +218,15 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
         chosen = {r: (x if len(x) <= max_rows else
                       x[x.event_slug.isin(x.event_slug.drop_duplicates().sample(
                           frac=max_rows / len(x), random_state=int(a) % 2**31))]) for r, x in chosen.items()}
-        parts = [x.assign(_rule=r) for r, x in chosen.items() if len(x)]
-        if not parts:
+        if not any(len(x) for x in chosen.values()):
             continue
-        allrows = pd.concat(parts)
-        cp = skill.copy_prices(nxt, allrows, delays=tuple(delays))
+        # These are independent policies, not orders in one combined portfolio.
+        # Reuse the immutable tape index, resetting liquidity for each policy.
+        groups = skill.build_groups(nxt)
         for r in rules:
-            part = cp[cp._rule == r]
+            if chosen[r].empty:
+                continue
+            part = skill.copy_prices(nxt, chosen[r], delays=tuple(delays), groups=groups)
             for d in delays:
                 rr = skill.copy_returns(part, d)
                 if rr.empty:

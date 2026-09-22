@@ -20,8 +20,10 @@ import statsmodels.api as sm
 
 from ..collect import sport_dir
 from ..polymarket import taker_fee
+from ..execution import panel_entries
+from ..research.common import cluster_ci
 from ..wallets.universe import OUT
-from .favorites import PREGAME_MIN_USD, favorite_bets
+from .favorites import PREGAME_MIN_USD, favorite_bets, cached_pregame_prices
 from .hypotheses import _baseline_we, _features
 
 log = logging.getLogger("pmsports")
@@ -48,17 +50,19 @@ def _ci(x, n_boot=2000, seed=2):
 # ----------------------------------------------------------------------------- Part A
 
 def pregame_thresholds() -> dict[str, pd.DataFrame]:
-    m = pd.read_parquet(OUT / "pregame_prices.parquet")
+    m = cached_pregame_prices()
     b = favorite_bets(m)
     b = b[b.pre_usd >= PREGAME_MIN_USD].copy()
-    b["entry"] = np.where(b.fav_ask.notna(), np.maximum(b.fav_ask, b.fav_p), b.fav_p + 0.01)  # executable
+    n_signals = len(b)
+    b = b[b.fav_ask.notna() & b.fav_stake.gt(0)].copy()
+    b["entry"] = b.fav_ask
     b["roi"] = _roi(b.entry, b.fav_won, b.fee_rate)
     b["roi_nofee"] = _roi(b.fav_p, b.fav_won, 0.0)
 
     def row(g, label):
         return {"games": len(g), "avg_price": g.fav_p.mean(), "win_rate": g.fav_won.mean(),
                 "win_minus_price": g.fav_won.mean() - g.fav_p.mean(), "roi_before_costs": g.roi_nofee.mean(),
-                "roi_after_fees": g.roi.mean(), "ci95": _ci(g.roi), "pnl_$100_per_game": 100 * g.roi.sum(), **label}
+                "roi_after_fees": np.average(g.roi, weights=g.fav_stake) if len(g) else np.nan, "ci95": _weighted_ci(g.roi, g.event_slug, g.fav_stake), "actual_proxy_pnl_usd": (g.roi * g.fav_stake).sum(), "capital_usd": g.fav_stake.sum(), **label}
 
     cum = [row(b[b.fav_p >= t], {"threshold": f">= {t:.0%}"}) for t in THRESH]
     bands = [row(b[(b.fav_p >= lo) & (b.fav_p < hi)], {"band": f"{lo:.0%}-{hi:.0%}"})
@@ -70,7 +74,7 @@ def pregame_thresholds() -> dict[str, pd.DataFrame]:
         rec = {"sport": fam, "games": len(g)}
         for t in THRESH:
             s = g[g.fav_p >= t]
-            rec[f">={t:.0%}"] = s.roi.mean() if len(s) >= 30 else np.nan
+            rec[f">={t:.0%}"] = np.average(s.roi, weights=s.fav_stake) if len(s) >= 30 else np.nan
             rec[f"n>={t:.0%}"] = len(s)
         grid.append(rec)
     grid = pd.DataFrame(grid)
@@ -81,11 +85,11 @@ def pregame_thresholds() -> dict[str, pd.DataFrame]:
             s = g[g.fav_p >= t]
             if len(s) >= 30:
                 cells.append({"sport": fam, "threshold": f">= {t:.0%}", "games": len(s),
-                              "roi_after_fees": s.roi.mean(), "ci95": _ci(s.roi)})
+                              "roi_after_fees": np.average(s.roi, weights=s.fav_stake), "ci95": _weighted_ci(s.roi, s.event_slug, s.fav_stake)})
     cells = pd.DataFrame(cells)
     return {"cumulative": pd.DataFrame(cum)[["threshold"] + [c for c in cum[0] if c != "threshold"]],
             "bands": pd.DataFrame(bands)[["band"] + [c for c in bands[0] if c != "band"]],
-            "by_sport": grid, "cells": cells, "n": len(b)}
+            "by_sport": grid, "cells": cells, "n": len(b), "signals": n_signals}
 
 
 # ----------------------------------------------------------------------------- Part B
@@ -101,83 +105,70 @@ def _prior_season_fair(panel: pd.DataFrame, baseline: pd.DataFrame) -> np.ndarra
     return fair
 
 
+def _weighted_ci(roi, event, weights):
+    if len(roi) == 0:
+        return ""
+    _, lo, hi = cluster_ci(roi, np.asarray(event), weights=np.asarray(weights))
+    return f"{lo:+.3f}..{hi:+.3f}"
+
+
+def _execution_summary(g, home, slip=.01, cap=100.):
+    r = panel_entries(g, home, slip=slip, event_cap_usd=cap)
+    fill = r[r.cost_usd > 0]
+    mean, lo, hi = cluster_ci(fill.roi, fill.event.to_numpy(), weights=fill.cost_usd.to_numpy()) if len(fill) else (np.nan,) * 3
+    return dict(signals=len(r), n=len(fill), unfilled=int((r.cost_usd == 0).sum()),
+                partial=int(r.status.eq("partial").sum()), avg_price=fill.entry_price.mean(),
+                actual_win_rate=fill.y.mean(), capital_usd=fill.cost_usd.sum(), pnl_usd=fill.pnl_usd.sum(),
+                roi_after_fees_1c=mean, ci95=f"{lo:+.3f}..{hi:+.3f}")
+
+
 def inning_discounts() -> dict[str, pd.DataFrame]:
     d = sport_dir("mlb")
     panel = pd.read_parquet(d / "panel.parquet")
     baseline = pd.read_parquet(d / "baseline.parquet")
-    p = panel[panel.checkpoint & panel.mkt_p.notna() & (panel["diff"] != 0)].copy()
+    p = panel[panel.checkpoint & panel.mkt_p.notna() & panel.mkt_staleness.le(120) & (panel["diff"] != 0)].copy()
     p = p.sort_values(["game_pk", "state_ts"]).reset_index(drop=True)
     p["fair_home"] = _prior_season_fair(p, baseline)
     home_leads = p["diff"] > 0
-    p["lead"] = p["diff"].abs().clip(upper=5)
-    p["inn"] = p.inning.clip(upper=10)
+    p["lead"], p["inn"] = p["diff"].abs().clip(upper=5), p.inning.clip(upper=10)
     p["price_leader"] = np.where(home_leads, p.mkt_p, 1 - p.mkt_p)
     p["fair_leader"] = np.where(home_leads, p.fair_home, 1 - p.fair_home)
     p["pre_leader"] = np.where(home_leads, p.pre_p, 1 - p.pre_p)
-    won = p.home_won_final.astype(float)
-    p["leader_won"] = np.where(home_leads, won, 1 - won)
-    p["discount"] = p.fair_leader - p.price_leader        # >0: leader cheaper than history says
-    p["roi"] = _roi(p.price_leader, p.leader_won, p.fee_rate, slip=0.01)
-
-    # what does a "discounted" leader look like? (team strength explains the gap)
-    desc = []
-    for x in DISCOUNTS[1:]:
-        s = p[p.discount >= x]
-        desc.append({"discount_at_least": f"{x:.0%}", "checkpoints": len(s), "games": s.game_pk.nunique(),
-                     "avg_hist_win_rate": s.fair_leader.mean(), "avg_price": s.price_leader.mean(),
-                     "actual_win_rate": s.leader_won.mean(),
-                     "leader_was_pregame_underdog": (s.pre_leader < 0.5).mean(),
-                     "avg_leader_pregame_price": s.pre_leader.mean()})
-    desc = pd.DataFrame(desc)
-
-    rules = []
+    p["leader_won"] = np.where(home_leads, p.home_won_final, 1 - p.home_won_final)
+    p["discount"] = p.fair_leader - p.price_leader
+    desc, rules = [], []
     for x in DISCOUNTS:
         s = p[p.discount >= x]
-        first = s.groupby("game_pk").head(1)             # one bet per game: first time the rule fires
-        for label, g in (("first signal per game", first), ("every signal (half-inning starts)", s)):
-            rules.append({"discount_at_least": f"{x:.0%}", "bets": label, "n": len(g),
-                          "avg_price": g.price_leader.mean(), "hist_win_rate": g.fair_leader.mean(),
-                          "actual_win_rate": g.leader_won.mean(), "roi_after_fees_1c": g.roi.mean(),
-                          "ci95": _ci(g.roi) if label.startswith("first") else _ci_cluster(g),
-                          "by_season": " / ".join(f"{yr}: {gg.roi.mean():+.3f} (n={len(gg)})"
-                                                  for yr, gg in g.groupby(g.event_date.str[:4]))})
-    rules = pd.DataFrame(rules)
-
-    # by inning x lead at a 3-point discount, first signal per game
-    s = p[p.discount >= 0.03].groupby("game_pk").head(1)
-    cell = s.groupby(["inn", "lead"]).agg(bets=("roi", "size"), avg_price=("price_leader", "mean"),
-                                          hist_win=("fair_leader", "mean"), won=("leader_won", "mean"),
-                                          roi=("roi", "mean")).reset_index()
-    cell = cell[cell.bets >= 20]
-
-    # version 2: fair value that also knows the pregame odds; fit on 2025, test on 2026
-    p["we"] = p.fair_home
-    p["y"] = won
+        desc.append(dict(discount_at_least=x, checkpoints=len(s), games=s.game_pk.nunique(),
+            avg_hist_win_rate=s.fair_leader.mean(), avg_price=s.price_leader.mean(),
+            actual_win_rate=s.leader_won.mean(), leader_was_pregame_underdog=s.pre_leader.lt(.5).mean(),
+            avg_leader_pregame_price=s.pre_leader.mean()))
+        for label, g in (("first signal per game", s.drop_duplicates("game_pk")),
+                         ("every signal;100 inclusive-dollar event cap", s)):
+            rules.append(dict(discount_at_least=x, bets=label, hist_win_rate=g.fair_leader.mean(),
+                              **_execution_summary(g, g["diff"] > 0)))
+    first = p[p.discount >= .03].drop_duplicates("game_pk")
+    cells = []
+    for (inn, lead), g in first.groupby(["inn", "lead"]):
+        cells.append(dict(inn=inn, lead=lead, **_execution_summary(g, g["diff"] > 0)))
+    p["we"], p["y"] = p.fair_home, p.home_won_final.astype(float)
     tr, te = p[p.event_date < "2026-01-01"], p[p.event_date >= "2026-01-01"].copy()
-    X = _features(tr)
-    cols = [c for c in X.columns if X[c].std() > 1e-9]
-    fit = sm.Logit(tr.y.to_numpy(), sm.add_constant(X[cols])).fit(disp=0)
-    te["model_home"] = fit.predict(sm.add_constant(_features(te)[cols], has_constant="add"))
-    hl = te["diff"] > 0
-    te["model_leader"] = np.where(hl, te.model_home, 1 - te.model_home)
-    te["edge_leader"] = te.model_leader - te.price_leader
-    te["edge_trailer"] = -te.edge_leader
     adj = []
-    for x in DISCOUNTS[1:]:
-        for side, col, price, wcol in (("leader", "edge_leader", "price_leader", "leader_won"),
-                                       ("trailer", "edge_trailer", None, None)):
-            s = te[te[col] >= x].groupby("game_pk").head(1)
-            if side == "trailer":
-                pr, w = 1 - s.price_leader, 1 - s.leader_won
-            else:
-                pr, w = s[price], s[wcol]
-            r = _roi(pr, w, s.fee_rate, slip=0.01)
-            adj.append({"model_edge_at_least": f"{x:.0%}", "buy": side, "bets": len(s),
-                        "avg_price": float(np.mean(pr)) if len(s) else np.nan,
-                        "actual_win_rate": float(np.mean(w)) if len(s) else np.nan,
-                        "roi_after_fees_1c": float(np.mean(r)) if len(s) else np.nan, "ci95": _ci(r)})
-    return {"describe": desc, "rules": rules, "cells": cell, "adjusted": pd.DataFrame(adj),
-            "n_checkpoints": len(p), "n_games": p.game_pk.nunique()}
+    if len(tr) >= 100 and len(te):
+        X = _features(tr)
+        cols = [c for c in X if X[c].std() > 1e-9]
+        fit = sm.Logit(tr.y.to_numpy(), sm.add_constant(X[cols], has_constant="add")).fit(disp=0)
+        te["model_home"] = fit.predict(sm.add_constant(_features(te)[cols], has_constant="add"))
+        te["edge_home"] = te.model_home - te.mkt_p
+        for x in DISCOUNTS[1:]:
+            for label, leading in (("leader", True), ("trailer", False)):
+                buy_home = (te["diff"] > 0) == leading
+                edge = np.where(buy_home, te.edge_home, -te.edge_home)
+                g = te[edge >= x].drop_duplicates("game_pk")
+                adj.append(dict(model_edge_at_least=x, buy=label,
+                    **_execution_summary(g, (g["diff"] > 0) == leading)))
+    return dict(describe=pd.DataFrame(desc), rules=pd.DataFrame(rules), cells=pd.DataFrame(cells),
+                adjusted=pd.DataFrame(adj), n_checkpoints=len(p), n_games=p.game_pk.nunique())
 
 
 def _ci_cluster(g: pd.DataFrame, n_boot=1000, seed=3) -> str:
@@ -210,24 +201,24 @@ def _render(a, b) -> str:
     L = ["# Threshold strategies", "",
          "## A. Bet the team whenever its pregame price is at least T", "",
          f"{a['n']:,} games (all sports, >= ${PREGAME_MIN_USD:,} traded before the start). Entry = the price "
-         "takers actually paid for that side in the last 10 minutes (executable), plus the market's actual "
+         "of the first later same-side print after the pregame decision; shares capped by that print, plus actual "
          "taker fee (0 in 2025, 3-5% in 2026); held to the end. `roi_before_costs` uses the pregame mid, no fee.",
          "", "Cumulative (every game at or above the threshold):", "", _md(a["cumulative"]), "",
          "Price bands (each game counted once):", "", _md(a["bands"]), "",
          "By sport: ROI per $1 after fees for each threshold (blank = fewer than 30 games):", "",
          _md(a["by_sport"][["sport", "games"] + [c for c in a["by_sport"].columns if c.startswith(">=")]]), "",
          f"Cells (sport x threshold) whose whole 95% CI is above zero: **{len(pos)} of {len(a['cells'])}**. "
-         f"With {len(a['cells'])} overlapping tests, about {0.025 * len(a['cells']):.0f} would do that by chance.",
+         "These overlapping historical tests do not provide a fresh confirmatory discovery.",
          "", _md(pos), "",
          "## B. MLB: buy the leader when it trades below its historical win rate", "",
          f"{b['n_checkpoints']:,} half-inning starts with a lead, in {b['n_games']:,} games. `hist_win_rate` = how "
          "often teams in exactly that spot (inning, half, lead, home/away) won, from seasons *before* the "
          "game's season. `discount` = historical win rate minus the leader's traded price. Entry at the "
-         "traded price + 1c + the actual fee, held to the end.", "",
+         "side-specific later-print proxy +1c +actual fee, bounded by size and100/event. "
+         "The5s clock starts at retrospective play time and is optimistic: receipt latency and depth are unknown. Held to settlement, with no mean-reversion exit tested.", "",
          "### Why do discounts appear? Look at who the discounted leaders are", "", _md(b["describe"]), "",
-         "The market is not ignoring history: it is pricing the *teams*. A leader trading below the "
-         "average rate is usually the weaker team (often a pregame underdog). Those leaders win at about "
-         "their price, not at the historical average.", "",
+         "Compare pregame team strength, reference price and realized outcome directly in the descriptive table; "
+         "these averages alone do not establish a tradable discrepancy.", "",
          "### The rule: buy the leader when price <= historical win rate - X", "", _md(b["rules"]), "",
          "By inning x lead (discount >= 3 pts, first signal per game):", "", _md(b["cells"]), "",
          "### Same rule with a fair value that knows team strength (fit on 2025, tested on 2026)", "",

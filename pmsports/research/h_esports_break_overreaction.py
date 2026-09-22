@@ -1,73 +1,9 @@
-"""Hypothesis `esports_break_overreaction`: BO3 between-map break overreaction in the series moneyline.
+"""Repaired primary: frozen round1 calibration, historical later-print size proxy.
 
-Mechanism (as pre-registered): the break after map 1 is a scheduled no-information window. Retail piles onto
-the map-1 winner ("momentum") while structural facts are neutral or favour the loser (map pick / side or draft
-priority). Any excess of the break price over a calibrated iid-map value is price pressure; taking the trailing
-team during the break collects it.
-
-Primary rule (pre-registered; implemented exactly, parameters frozen before the holdout run):
-  UNIVERSE  esports series moneylines in C.markets() (family esports, market_type moneyline) with pre_usd >= $25k
-            that are BO3: the universe lists the event's '-game1' and '-game2' child moneylines and its
-            '-total-games-2pt5' market (the BO3 marker: a total of 2.5 maps exists only in a BO3, which also
-            excludes BO2 formats), and no '-game4' / '-game5' / '-total-games-3pt5' / '-total-games-4pt5' (BO5
-            markers). All of these are listed before the match (pre-decision information).
-            DEV = game_start_ts < 2026-07-01, HOLDOUT = game_start_ts >= 2026-07-01.
-  MAP-1 END t_end = ts of the first game1 child fill whose implied price of either outcome is >= 0.99; that
-            outcome is the leader L. Child outcomes are team names in the same order as the series o0/o1
-            (checked: 2,492/2,492 identical), so L maps to the series outcome index directly.
-  MODEL     P0 = L's pregame series price (pre_mid0 oriented to L, clipped to [0.01, 0.99]); p solves
-            P0 = p^2 (3 - 2p); fair_iid = 1 - (1 - p)^2 (L needs one of the next two maps).
-  CALIB     DEV only, frozen: logistic regression of 1{L wins the series} (voids dropped) on logit(fair_iid)
-            plus game-title dummies (cs2 = base, lol, dota2, valorant; 'other' has no BO3 series with child
-            markets) -> P_cal. Fitted on every DEV series with a map-1 end and a pregame price (not only those
-            that trade). Coefficients saved to calib.json and reused unchanged for the holdout.
-  SIGNAL    P_break = median L-oriented series fill price over [t_end+30, t_end+150] (>= 3 fills, else no bet).
-            If P_break - P_cal >= 0.04: buy the trailing team T at the FIRST series fill acquiring T with ts in
-            [t_end+153, t_end+600], at that fill's price, plus the market's taker fee (fee_rate on the fill).
-            Review fix (round 2): if no fill acquires T in that window, the signal is NOT dropped; it is filled at
-            a quote proxy built from pre-decision prints only (1 - the last L-acquiring print in [t_end+30,
-            t_end+150] + 1c, i.e. the implied T bid plus a 1c spread). Sensitivities: the next T print after
-            t_end+153 with no time cap, and every bet at the quote proxy.
-  HYGIENE   Review fix (round 2): series with t_end < game_start_ts + 10 min are dropped from the calibration and
-            from every rule (pre_mid0 comes from [start - 10 min, start), which would overlap map-1 play or even the
-            post-decision break).
-  BET       one per series, held to resolution (series payout; 0.5 on void).
-  METRIC    C.taker_roi per $1 staked (flat stake), C.cluster_ci by series event_slug; +1c slippage sensitivity.
-Variants (all reported): (a) thresholds 0.03 / 0.06; (b) mirror: P_break - P_cal <= -0.04 -> buy L at the first
-  series fill acquiring L in the same window; (c) per-title split; (d) placebo: P_cal replaced by the median
-  L-oriented series price over [t_end-150, t_end-30] (>= 3 fills), expected null; (e) synthetic decider,
-  DEV only, exploratory: <= 300 DEV series whose game2 tape is already cached (by the esports_identity_pickoff
-  study); S_L, g_L = median L-oriented series / game2 fill prices over [t_end+30, t_end+180] (>= 3 fills each);
-  implied p3 = (S_L - g_L)/(1 - g_L); p_hat = p (iid per-map probability from P0). If p3 < p_hat - 0.08 buy
-  series_L + game2_T (= $1 floor + a long 'L wins map 3' claim), if p3 > p_hat + 0.08 buy series_T + game2_L; each
-  leg 1 share at its first print acquiring that side in [t_end+183, t_end+600], fee on both legs; if one leg never
-  prints, the printed leg is held alone.
-Extra diagnostics (not trading rules): detection accuracy (L vs game1 payout), calibration tables of P_break /
-  P_cal vs outcome, 5-fold cross-fitted DEV calibration (removes in-sample fit from the DEV ROI), DEV 2025 vs
-  2026 split, capacity at the entry print.
-
-Data: series fills from C.fills (local). game1 child tapes via pmsports.polymarket.trades over [start - 30 min,
-closed_ts] (HOST_RPS 5), cached in data/research/h_esports_break_overreaction/tapes/. Tapes already cached by the
-esports_identity_pickoff study (window [start - 1 h, closed_ts], a superset) are read from there and trimmed to
-this window instead of re-fetching. Fresh API fetches are capped at MAX_FETCH = 2,000 markets.
-
-Run:  PYTHONPATH=. systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 .venv/bin/python \
-        -m pmsports.research.h_esports_break_overreaction fetch        (universe + tapes, idempotent)
-      ... -m pmsports.research.h_esports_break_overreaction analyze    (DEV only; fits and freezes calibration)
-      ... -m pmsports.research.h_esports_break_overreaction analyze --holdout   (one-shot holdout evaluation)
-      ... -m pmsports.research.h_esports_break_overreaction extras   (post-holdout descriptive diagnostics)
-      (`analyze --rebuild` recomputes events.parquet from the tapes.)
-
-Run log: a first DEV run had a floating-point bug in the map-1 end detector (1 - 0.99 = 0.0100000000009, so
-some 0.99 prints were missed and t_end came out late); prices are now rounded to 1e-6. DEV was re-run after
-the fix (results_dev_v0_floatbug.json keeps the buggy run); the holdout was evaluated once, after the fix, with
-the calibration frozen in calib.json (round 1: *_v1 files).
-Round 2 (review fixes, after the round-1 holdout had been seen): (1) signals with no print on our side in the
-entry window are filled at the quote proxy instead of being dropped (1 of 60 holdout primary signals had been
-dropped; it was a winner); (2) series with t_end < start + 10 min are dropped (17 DEV, 2 holdout series; none was
-a primary bet); (3) the calibration is refitted on the cleaned DEV series only (calib.json; the round-1 fit is kept
-as calib_v1.json and evaluated as a sensitivity). No threshold, window or model form was changed. The holdout was
-re-evaluated once with these fixes: a second look, disclosed in the report.
+No entry is inferred from an opposite-side print or invented spread. Signals without
+an entry stay in the audit with zero capital.100USD inclusive-fee target capped by
+first actual print shares. Public receipt clocks and resting depth are unobserved.
+The legacy discovery universe and prior rounds remain exploratory; July2026 was seen.
 """
 from __future__ import annotations
 
@@ -79,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pmsports.research import common as C
+from pmsports.execution import TapeReplay, VERSION
 
 SLUG = "esports_break_overreaction"
 OUT = C.RESEARCH / f"h_{SLUG}"
@@ -316,8 +253,8 @@ def predict(df: pd.DataFrame, cal: dict) -> np.ndarray:
 
 def first_fill(ts, s, q, size, rate, side, a, b):
     """First fill acquiring `side` with ts in [a, b] -> (ts, price, shares, fee_rate) or None."""
-    i = np.searchsorted(ts, a, "left")
-    e = np.searchsorted(ts, b, "right")
+    i = np.searchsorted(ts, a, "right")
+    e = np.searchsorted(ts, b, "left")
     k = np.flatnonzero(s[i:e] == side)
     if not len(k):
         return None
@@ -326,32 +263,22 @@ def first_fill(ts, s, q, size, rate, side, a, b):
 
 
 def quote_proxy(ts, s, q, rate, side, a, b):
-    """Ask proxy for `side` from prints in [a, b], all at or before the decision time -> (price, fee_rate) or None.
-    A taker acquiring the OTHER side at q hit a resting bid of 1 - q for `side`; the ask is taken as that bid + 1c
-    (QUOTE_SPREAD, the typical spread). If every print in [a, b] acquired `side`, its last price + 1c (stale ask)."""
-    i = np.searchsorted(ts, a, "left")
-    e = np.searchsorted(ts, b, "right")
-    if e <= i:
-        return None
-    opp = np.flatnonzero(s[i:e] != side)
-    j = i + opp[-1] if len(opp) else e - 1
-    px = 1 - q[j] + QUOTE_SPREAD if len(opp) else q[j] + QUOTE_SPREAD
-    return float(min(px, 0.999)), float(rate[j])
+    """Historical trades cannot reconstruct an ask; deliberately no executable fallback."""
+    return None
 
 
 def entry(ts, s, q, size, rate, side, dec, ent_a, ent_b, qa, qb):
-    """Execution for a signal decided at `dec` (review fix: no signal is dropped for lack of a later print).
-    1) pre-registered: first print acquiring `side` in [ent_a, ent_b] (ent_a = dec + 3 s);
-    2) if there is none: the quote proxy from the prints in [qa, qb] (qb <= dec, so pre-decision data only), dated ent_a.
-    -> (ts, price, shares, fee_rate, how) or None (only when there is no print at all in [qa, qb] either)."""
+    """First actual relevant print strictly after delayed eligibility; no synthetic quote."""
     assert qb <= dec and ent_a >= dec + 3
-    ff = first_fill(ts, s, q, size, rate, side, ent_a, ent_b)
-    if ff is not None:
-        return (*ff, "window")
-    qp = quote_proxy(ts, s, q, rate, side, qa, qb)
-    if qp is not None:
-        return int(ent_a), qp[0], np.nan, qp[1], "quote"
-    return None
+    tape = pd.DataFrame(dict(m=0, s=s, ts=ts, q=q, size=size, fee_rate=rate))
+    orders = pd.DataFrame([dict(m=0, s=side, signal_ts=dec, expiry_ts=ent_b, y=np.nan)])
+    row = TapeReplay(tape).replay(orders, delay_s=ent_a - dec).iloc[0]
+    if row.shares <= 0:
+        return None
+    j = np.searchsorted(ts, row.fill_ts, side="left")
+    match = np.flatnonzero((ts == row.fill_ts) & (s == side) & np.isclose(q, row.entry_price))
+    j = match[0] if len(match) else j
+    return float(row.fill_ts), float(row.entry_price), float(size[j]), float(rate[j]), "window"
 
 
 def window_cap(ts, s, q, size, side, a, b, pmax):
@@ -376,7 +303,12 @@ def build_events(ser: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for r in ser.itertuples():
         rec = dict(event_slug=r.event_slug, m=r.m, title=r.title, period=r.period, start=r.game_start_ts,
-                   pre_usd=r.pre_usd, pre_mid0=r.pre_mid0, fee_mkt=r.fee_rate, has_tape=False, t_end=np.nan, L=-1)
+                   pre_usd=r.pre_usd, pre_mid0=r.pre_mid0, fee_mkt=r.fee_rate, has_tape=False, t_end=np.nan, L=-1,
+                   execution_version=VERSION)
+        for name in ("T", "L", "NCT", "NCL", "QT", "QL"):
+            for col in ("q", "ts", "sh", "rate", "cap"):
+                rec[f"ent{name}_{col}"] = np.nan
+            rec[f"ent{name}_how"] = "unfilled"
         g1 = load_tape(r.g1_cid)
         if g1 is not None:
             rec["has_tape"] = True
@@ -396,7 +328,7 @@ def build_events(ser: pd.DataFrame) -> pd.DataFrame:
             s = g.s.to_numpy(np.int8)
             q = np.round(g.q.to_numpy(float), 6)   # float32 storage -> exact ticks
             sz = g["size"].to_numpy(float)
-            rt = np.round(np.nan_to_num(g.fee_rate.to_numpy(float)), 6)
+            rt = np.round(g.fee_rate.to_numpy(float), 6)
             pL = np.where(s == L, q, 1 - q)
             y = (mk.at[r.m, "y0"], mk.at[r.m, "y1"])
             rec["yL"] = float(y[L])
@@ -408,26 +340,26 @@ def build_events(ser: pd.DataFrame) -> pd.DataFrame:
             j = np.searchsorted(ts, te, "left") - 1
             rec["P_last_pre"] = float(pL[j]) if j >= 0 else np.nan
             for nm, side in (("T", 1 - L), ("L", L)):
-                # executed entry: window print, else quote proxy from the break window (review fix)
+                # Actual later acquired-side print only; retain missing entry as unfilled.
                 ff = entry(ts, s, q, sz, rt, side, te + BRK_B, te + ENT_A, te + ENT_B, te + BRK_A, te + BRK_B)
                 if ff:
                     (rec[f"ent{nm}_ts"], rec[f"ent{nm}_q"], rec[f"ent{nm}_sh"], rec[f"ent{nm}_rate"],
                      rec[f"ent{nm}_how"]) = ff
-                    rec[f"ent{nm}_cap"] = window_cap(ts, s, q, sz, side, te + ENT_A, te + ENT_B, ff[1] + 0.01)
+                    rec[f"ent{nm}_cap"] = ff[1] * ff[2]
                 # sensitivity 1: next print on our side after decision + 3 s with NO 600 s cap
                 nc = first_fill(ts, s, q, sz, rt, side, te + ENT_A, np.inf)
                 if nc:
-                    rec[f"entNC{nm}_ts"], rec[f"entNC{nm}_q"], rec[f"entNC{nm}_rate"] = nc[0], nc[1], nc[3]
-                # sensitivity 2: every bet at the quote proxy at the decision (pre-decision data only)
+                    rec[f"entNC{nm}_ts"], rec[f"entNC{nm}_q"], rec[f"entNC{nm}_sh"], rec[f"entNC{nm}_rate"] = nc
+                # Deprecated quote reconstruction intentionally supplies no fill.
                 qp = quote_proxy(ts, s, q, rt, side, te + BRK_A, te + BRK_B)
                 if qp:
                     rec[f"entQ{nm}_q"], rec[f"entQ{nm}_rate"] = qp
-            # variant (e): series L price over the synthetic window; legs with the same quote fallback
+            # Variant(e): independently observed actual later prints for each leg.
             rec["S_L"], rec["n_S"] = med_window(ts, pL, te + SYN_A, te + SYN_B)
             for nm, side in (("sT", 1 - L), ("sL", L)):
                 ff = entry(ts, s, q, sz, rt, side, te + SYN_B, te + SYN_ENT, te + ENT_B, te + SYN_A, te + SYN_B)
                 if ff:
-                    rec[f"{nm}_q"], rec[f"{nm}_rate"], rec[f"{nm}_how"] = ff[1], ff[3], ff[4]
+                    rec[f"{nm}_q"], rec[f"{nm}_rate"], rec[f"{nm}_how"], rec[f"{nm}_sh"] = ff[1], ff[3], ff[4], ff[2]
         rows.append(rec)
     ev = pd.DataFrame(rows)
     P0 = np.clip(ev.P0.to_numpy(float), 0.01, 0.99)
@@ -456,7 +388,7 @@ def synth_rows(ev: pd.DataFrame, ser: pd.DataFrame) -> pd.DataFrame:
         s = g2.acq.to_numpy(np.int8)
         q = g2.q.to_numpy(float)
         sz = g2["size"].to_numpy(float)
-        rt = np.full(len(ts), np.nan_to_num(float(s2.at[r.event_slug, "g2_fee"])))
+        rt = np.full(len(ts), float(s2.at[r.event_slug, "g2_fee"]))
         pL = np.where(s == L, q, 1 - q)
         gL, n_g = med_window(ts, pL, te + SYN_A, te + SYN_B)
         y2 = (s2.at[r.event_slug, "g2_y0"], s2.at[r.event_slug, "g2_y1"])
@@ -464,7 +396,7 @@ def synth_rows(ev: pd.DataFrame, ser: pd.DataFrame) -> pd.DataFrame:
         for nm, side in (("gT", 1 - L), ("gL", L)):
             ff = entry(ts, s, q, sz, rt, side, te + SYN_B, te + SYN_ENT, te + ENT_B, te + SYN_A, te + SYN_B)
             if ff:
-                rec[f"{nm}_q"], rec[f"{nm}_rate"], rec[f"{nm}_how"] = ff[1], ff[3], ff[4]
+                rec[f"{nm}_q"], rec[f"{nm}_rate"], rec[f"{nm}_how"], rec[f"{nm}_sh"] = ff[1], ff[3], ff[4], ff[2]
         rows.append(rec)
         if len(rows) >= SYN_MAX:
             break
@@ -474,49 +406,60 @@ def synth_rows(ev: pd.DataFrame, ser: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------------------------------------------------------- bets / stats
 
 def bets(ev: pd.DataFrame, side: str, cond: pd.Series, entry_kind: str = "") -> pd.DataFrame:
-    """side 'T' (trailer) or 'L' (leader); cond: boolean signal mask.
-    entry_kind '' = executed entry (window print, else quote proxy); 'NC' = next print on our side, no time cap;
-    'Q' = quote proxy at the decision for every bet. Review fix: every signal must become a bet (no selection on
-    whether someone else printed on our side after the decision); the assert enforces it for the executed entry."""
+    """Retain all signals; unknown entry has zero allocated shares and zero PnL."""
     k = f"ent{entry_kind}{side}"
-    has = ev[f"{k}_q"].notna()
-    if entry_kind == "":
-        miss = ev[cond & ~has]
-        assert len(miss) == 0, f"{len(miss)} signals without an executable entry: {miss.event_slug.tolist()[:5]}"
-    b = ev[cond & has].copy()
-    b["q"] = b[f"{k}_q"]
-    b["rate"] = b[f"{k}_rate"].fillna(b.fee_mkt)
+    b = ev[cond].copy()
+    b["q"] = b.get(f"{k}_q", pd.Series(np.nan, index=b.index))
+    b["rate"] = b.get(f"{k}_rate", pd.Series(np.nan, index=b.index)).fillna(b.fee_mkt)
     b["won"] = b[f"y{side}"]
-    b["how"] = b[f"ent{side}_how"] if entry_kind == "" else ("next_print_nocap" if entry_kind == "NC" else "quote")
-    b["cap"] = b[f"ent{side}_cap"] if entry_kind == "" else np.nan
-    b["first_usd"] = b[f"ent{side}_q"] * b[f"ent{side}_sh"] if entry_kind == "" else np.nan
-    b["delay_s"] = b[f"{k}_ts"] - b.t_end if f"{k}_ts" in b else np.nan
-    b["n_signal"] = int(cond.sum())
+    b["how"] = b.get(f"{k}_how", pd.Series("unfilled", index=b.index))
+    b["available_shares"] = b.get(f"{k}_sh", pd.Series(0., index=b.index)).fillna(0)
+    b["cap"] = (b.available_shares * b.q).fillna(0)
+    b["first_usd"] = b.cap
+    b["delay_s"] = b.get(f"{k}_ts", pd.Series(np.nan, index=b.index)) - b.t_end
+    b["n_signal"] = len(b)
+    b["signal_ts"] = b.t_end + BRK_B
+    b["eligible_ts"] = b.signal_ts + 3
+    b["fill_ts"] = b.get(f"{k}_ts", pd.Series(np.nan, index=b.index))
+    valid = b.q.between(.000001, .999999) & b.fill_ts.gt(b.eligible_ts) & b.rate.ge(0)
+    if entry_kind == "":
+        valid &= b.fill_ts.lt(b.t_end + ENT_B)
+    unitfee = C.taker_fee(1., b.q, b.rate)
+    b["shares"] = np.where(valid, np.minimum(b.available_shares, 100 / (b.q + unitfee)), 0)
+    b["stake_usd"] = (b.shares * b.q).fillna(0)
+    b["fee_usd"] = (b.shares * unitfee).fillna(0)
+    b["cost_usd"] = b.stake_usd + b.fee_usd
+    b["payout"] = b.shares * b.won
+    b["pnl_usd"] = b.payout - b.cost_usd
+    b["roi"] = np.where(b.cost_usd > 0, b.pnl_usd / b.cost_usd, np.nan)
+    b["status"] = np.where(b.cost_usd <= 0, "unfilled", np.where(b.cost_usd >= 100 - 1e-8, "filled", "partial"))
     return b
 
 
 def summ(b: pd.DataFrame, slip: float = 0.0) -> dict:
     if b is None or len(b) == 0:
-        return dict(bets=0, roi=np.nan, ci_lo=np.nan, ci_hi=np.nan)
-    r = C.taker_roi(b.q, b.won, b.rate, slip=slip)
-    m, lo, hi = C.cluster_ci(r, b.event_slug)
-    return dict(bets=int(len(b)), roi=round(m, 4), ci_lo=round(lo, 4), ci_hi=round(hi, 4),
-                win=round(float(b.won.mean()), 3), avg_q=round(float(b.q.mean()), 3),
-                avg_fee_rate=round(float(np.nan_to_num(b.rate).mean()), 4),
-                first_print_usd=round(float(b.first_usd.sum()), 0), window_cap_usd=round(float(b.cap.sum()), 0),
-                median_window_cap_usd=round(float(b.cap.median()), 0))
+        return dict(signals=0, bets=0, unfilled=0, roi=np.nan, ci_lo=np.nan, ci_hi=np.nan)
+    g = b[b.shares > 0].copy()
+    c = g.q + slip
+    valid = c.lt(1)
+    g, c = g[valid], c[valid]
+    fee1 = C.taker_fee(1., c, g.rate)
+    shares = np.minimum(g.available_shares, 100 / (c + fee1))
+    cost = shares * (c + fee1)
+    pnl = shares * g.won - cost
+    roi = pnl / cost
+    m, lo, hi = C.cluster_ci(roi, g.event_slug, weights=cost) if len(g) else (np.nan,) * 3
+    return dict(signals=len(b), bets=len(g), unfilled=len(b) - len(g), partial=int((cost < 100 - 1e-8).sum()),
+                roi=round(m, 4), ci_lo=round(lo, 4), ci_hi=round(hi, 4),
+                capital_usd=float(cost.sum()), pnl_usd=float(pnl.sum()),
+                win=float(g.won.mean()), avg_q=float(g.q.mean()), avg_fee_rate=float(g.rate.mean()),
+                first_print_usd=float(g.first_usd.sum()), window_cap_usd=float(g.cap.sum()),
+                median_window_cap_usd=float(g.cap.median()))
 
 
 def both(b: pd.DataFrame) -> dict:
-    out = {"fee": summ(b), "fee_plus_1c": summ(b, 0.01), "signals": int(b.n_signal.iloc[0]) if len(b) else 0,
-           "bets": int(len(b))}
-    if len(b) and "how" in b:
-        out["entry_how"] = b.how.value_counts().to_dict()
-        fb = b[b.how == "quote"] if (b.how == "window").any() else b.iloc[:0]
-        if len(fb):   # signals that had no print on our side in [t_end+153, t_end+600] (quote-proxy fills)
-            out["quote_fallback_bets"] = [dict(event_slug=r.event_slug, q=round(float(r.q), 4), won=float(r.won))
-                                          for r in fb.itertuples()]
-    return out
+    return {"fee": summ(b), "fee_plus_1c": summ(b, .01), "signals": len(b),
+            "bets": int(b.shares.gt(0).sum()), "entry_how": b.how.value_counts().to_dict()}
 
 
 def calib_table(e: pd.DataFrame) -> dict:
@@ -582,7 +525,7 @@ def evaluate(ev: pd.DataFrame, per: str, syn: pd.DataFrame | None = None) -> dic
         res[f"{k}_by_year"] = {y: both(bb[yr == y]) for y in ("2025", "2026") if (yr == y).any()}
         res[f"{k}_by_fee_rate"] = {str(fr): both(bb[bb.fee_mkt.fillna(0) == fr]) for fr in sorted(bb.fee_mkt.fillna(0).unique())}
         # robustness: drop the top 1% / 3 / 5 series by P&L (per $1)
-        r = C.taker_roi(bb.q, bb.won, bb.rate)
+        r = bb.pnl_usd.to_numpy()
         order = np.argsort(-r)
         rob = {}
         for n_drop in (int(np.ceil(0.01 * len(bb))), 3, 5):
@@ -620,13 +563,15 @@ def eval_synth(e: pd.DataFrame, syn: pd.DataFrame) -> dict:
                 if pd.isna(qv):
                     continue
                 c = min(max(qv + slip, 0.001), 0.999)
-                cost += c + float(C.taker_fee(1.0, c, getattr(r, f"{nm}_rate")))
-                pay += y
+                sh = min(1., max(0., getattr(r, f"{nm}_sh", 0.)))
+                if sh <= 0:
+                    continue
+                cost += sh * (c + float(C.taker_fee(1.0, c, getattr(r, f"{nm}_rate"))))
+                pay += sh * y
                 n_legs += 1
                 n_quote += int(getattr(r, f"{nm}_how", "") == "quote")
-            if n_legs:
-                rows.append(dict(event_slug=r.event_slug, kind=kind, slip=slip, n_legs=n_legs, n_quote=n_quote,
-                                 cost=cost, pay=pay))
+            rows.append(dict(event_slug=r.event_slug, kind=kind, slip=slip, n_legs=n_legs, n_quote=n_quote,
+                             cost=cost, pay=pay))
     t = pd.DataFrame(rows)
     for kind in ("long_L_map3", "short_L_map3"):
         for slip in (0.0, 0.01):
@@ -634,8 +579,10 @@ def eval_synth(e: pd.DataFrame, syn: pd.DataFrame) -> dict:
             if len(x) == 0:
                 out[f"{kind}_slip{slip}"] = dict(bets=0)
                 continue
-            m, lo, hi = C.cluster_ci((x.pay - x.cost) / x.cost, x.event_slug, weights=x.cost)
-            out[f"{kind}_slip{slip}"] = dict(bets=int(len(x)), both_legs=int((x.n_legs == 2).sum()),
+            signals = len(x)
+            x = x[x.cost > 0]
+            m, lo, hi = C.cluster_ci((x.pay - x.cost) / x.cost, x.event_slug, weights=x.cost) if len(x) else (np.nan,) * 3
+            out[f"{kind}_slip{slip}"] = dict(signals=signals, unfilled=signals-len(x), bets=int(len(x)), both_legs=int((x.n_legs == 2).sum()),
                                              quote_legs=int(x.n_quote.sum()),
                                              roi=round(m, 4), ci_lo=round(lo, 4), ci_hi=round(hi, 4))
     return out
@@ -694,58 +641,83 @@ def jsonable(o):
 def analyze(holdout: bool = False) -> None:
     ser = pd.read_parquet(OUT / "series.parquet")
     evf = OUT / "events.parquet"
-    if evf.exists() and "--rebuild" not in sys.argv:
-        ev = pd.read_parquet(evf)
-    else:
-        ev = build_events(ser)
-        ev.to_parquet(evf)
-    calf = OUT / "calib.json"
-    if holdout:
-        cal = json.loads(calf.read_text())            # frozen from the DEV run
-    else:
-        cal = calibrate(ev[ev.period == "dev"])
-        calf.write_text(json.dumps(cal, indent=1))
+    ev = build_events(ser)  # legacy event cache had unversioned execution assumptions
+    ev.to_parquet(evf)
+    calf = OUT / "calib_v1.json"
+    if not calf.exists():
+        raise RuntimeError("frozen round1 calibration is required; do not silently refit after inspection")
+    cal = json.loads(calf.read_text())
     print("calibration:", json.dumps(cal))
     ev["P_cal"] = np.where(ev.cal_ok, predict(ev.assign(fair_iid=ev.fair_iid.fillna(0.5)), cal), np.nan)
     ev["P_cal_cv"] = crossfit(ev)
     syn = synth_rows(ev, ser)
-    res = {"calibration_model": cal, "dev": evaluate(ev, "dev", syn)}
+    res = {"calibration_model": cal, "model_status": "frozen round1; historically explored windows",
+           "execution": "strictly later actual print; first-print shares;100 inclusive-dollar cap; no quote fallback",
+           "coverage": "legacy retrospective series discovery and bounded tapes; not an unbiased opportunity census",
+           "dev": evaluate(ev, "dev", syn)}
     res["dev_crossfit_seeds"] = crossfit_seeds(ev)
     if holdout:
         res["holdout"] = evaluate(ev, "holdout")
-        v1 = OUT / "calib_v1.json"      # round-1 calibration (fitted before the t_end hygiene filter), sensitivity
+        v1 = OUT / "calib.json"      # round2 after holdout inspection: exploratory sensitivity only
         if v1.exists():
             c1 = json.loads(v1.read_text())
             e1 = ev.assign(P_cal=np.where(ev.cal_ok, predict(ev.assign(fair_iid=ev.fair_iid.fillna(0.5)), c1), np.nan))
-            res["s_holdout_calib_v1"] = {}
+            res["exploratory_round2"] = {}
             for per in ("dev", "holdout"):
                 x = e1[e1.period == per]
                 okx = x.cal_ok & (x.n_brk >= MIN_BRK_FILLS)
-                res["s_holdout_calib_v1"][per] = {
+                res["exploratory_round2"][per] = {
                     "primary": both(bets(x, "T", okx & (x.P_break - x.P_cal >= THR))),
                     "mirror": both(bets(x, "L", okx & (x.P_break - x.P_cal <= -THR)))}
     for per in ("dev", "holdout") if holdout else ("dev",):
         B = res[per]["_bets"]
         pd.concat([v.assign(rule=k) for k, v in B.items()]).to_parquet(OUT / f"bets_{per}.parquet")
+    export_ledger(res, ser)
     tag = "holdout" if holdout else "dev"
     (OUT / f"results_{tag}.json").write_text(json.dumps(jsonable(res), indent=1))
     print(json.dumps(jsonable(res), indent=1))
+
+
+def export_ledger(res, ser):
+    """Canonical full ledger; downstream code must use allocated cash, never rescale to$1."""
+    rows = []
+    for per in ("dev", "holdout"):
+        if per in res:
+            rows.append(res[per]["_bets"]["primary_thr0.04"])
+    b = pd.concat(rows, ignore_index=True)
+    audit = b[["period", "event_slug", "title", "q", "fill_ts", "signal_ts", "eligible_ts",
+               "shares", "stake_usd", "fee_usd", "cost_usd", "payout", "pnl_usd", "roi", "status"]].copy()
+    audit = audit.rename(columns={"event_slug": "event", "title": "league", "q": "entry_price", "fill_ts": "entry_ts"})
+    audit["id"] = np.arange(1, len(audit) + 1)
+    audit["sport"], audit["exit_kind"] = "esports", "resolution"
+    audit["exit_ts"] = audit.event.map(ser.set_index("event_slug").closed_ts)
+    audit["exit_price"] = b.won
+    audit["side"] = "map1 trailing team"
+    audit["note"] = "Frozen round1; later actual transaction proxy; public receipt/book depth unknown"
+    doc = dict(slug=SLUG, title="Esports between-map overreaction: frozen round1", group="Sports studies",
+        sport="esports", verdict="UNVALIDATED", entry_rule="Frozen4point gap; actual same-side print strictly after3s;first-print size;100 inclusive-dollar cap",
+        exit_rule="Settlement", cost_model="Actual historical fee", truncated=False, n_total_trades=len(audit),
+        caveats=["No invented quote fills", "All selected no-fill signals retained", "Historically explored windows", "Legacy series discovery/tape coverage remains incomplete"],
+        headline={per: res[per]["rules"]["primary_thr0.04"]["fee"] for per in ("dev", "holdout") if per in res},
+        columns=list(audit), rows=json.loads(audit.to_json(orient="values")),
+        code_path="pmsports/research/h_esports_break_overreaction.py", report_path="reports/research/esports_break_overreaction.md")
+    target = C.RESEARCH / "ledgers" / f"{SLUG}.json"
+    target.parent.mkdir(exist_ok=True, parents=True)
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(jsonable(doc), separators=(",", ":"), allow_nan=False))
+    tmp.replace(target)
 
 
 def extras() -> None:
     """Post-holdout descriptive diagnostics (no refit, no new rule): per-title break-price calibration,
     all-leader / all-trailer baselines by title, mirror robustness and pooled estimate, month split, capacity."""
     ev = pd.read_parquet(OUT / "events.parquet")
-    cal = json.loads((OUT / "calib.json").read_text())
+    cal = json.loads((OUT / "calib_v1.json").read_text())
     ev["P_cal"] = np.where(ev.cal_ok, predict(ev.assign(fair_iid=ev.fair_iid.fillna(0.5)), cal), np.nan)
     bd, bh = pd.read_parquet(OUT / "bets_dev.parquet"), pd.read_parquet(OUT / "bets_holdout.parquet")
 
     def s(b, slip=0.0):
-        if len(b) == 0:
-            return dict(bets=0)
-        r = C.taker_roi(b.q, b.won, b.rate, slip=slip)
-        m, lo, hi = C.cluster_ci(r, b.event_slug)
-        return dict(bets=int(len(b)), roi=round(m, 4), ci_lo=round(lo, 4), ci_hi=round(hi, 4))
+        return summ(b, slip)
     out = {}
     for per in ("dev", "holdout"):
         d = ev[(ev.period == per) & ev.cal_ok & (ev.n_brk >= MIN_BRK_FILLS) & (ev.yL != 0.5)]
@@ -759,7 +731,7 @@ def extras() -> None:
             out[f"{nm}_by_title_{per}"] = {t: {"fee": s(x[x.title == t]), "fee_plus_1c": s(x[x.title == t], 0.01)}
                                           for t in ("cs2", "lol", "dota2", "valorant")}
     mh = bh[bh.rule == "b_mirror_buyL_thr0.04"]
-    rr = C.taker_roi(mh.q, mh.won, mh.rate)
+    rr = mh.pnl_usd.to_numpy()
     o = np.argsort(-rr)
     for k in (int(np.ceil(0.01 * len(mh))), 3, 5):
         keep = np.ones(len(mh), bool)
