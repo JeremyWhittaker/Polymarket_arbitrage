@@ -20,7 +20,8 @@ from .collect import _write, sport_dir
 
 log = logging.getLogger("pmsports")
 
-SETTLE_S = 60        # market price sampled this long after the play ends
+SETTLE_S = 60
+EXEC_DELAY_S = 5.0        # market price sampled this long after the play ends
 PREGAME_WIN_S = 600  # trade window before first pitch for the trade-based pregame price
 MIN_TRADES = 3       # fills needed before a trade-median price is preferred over bars
 TRADE_TS_LAG_S = 2.5 # Data-API timestamps are on-chain settlement, ~2.6s after the match
@@ -33,18 +34,15 @@ def _load_dir(path: Path) -> pd.DataFrame:
     return pd.concat((pd.read_parquet(f) for f in fs), ignore_index=True)
 
 
-def state_rows(plays: pd.DataFrame) -> pd.DataFrame:
+def state_rows(plays: pd.DataFrame, game_types: pd.Series = None) -> pd.DataFrame:
     """Post-play state per PA, plus a half-inning-start checkpoint row per half-inning.
 
     Checkpoints are emitted after the 3rd out of each half, labelled with the
-    *next* half-inning (e.g. after the 3rd out in the bottom of the 5th ->
-    "top 6th, 0 outs, bases empty"). The walk-off / final PA is dropped as a
-    state because the game is over.
+    *next* half-inning. The original 3rd-out rows are dropped so each state is unique.
     """
     p = plays.sort_values(["game_pk", "play_idx"]).copy()
     p["diff"] = p.home_score - p.away_score       # home perspective
     p["checkpoint"] = False
-    rows = [p]
     last = p[p.outs == 3].copy()
     if len(last):
         is_top = last.half == "top"
@@ -52,14 +50,18 @@ def state_rows(plays: pd.DataFrame) -> pd.DataFrame:
         last["half"] = np.where(is_top, "bottom", "top")
         last["outs"] = 0
         last[["on_1b", "on_2b", "on_3b"]] = False
-        last["on_2b"] = last.inning >= 10  # extra-inning automatic runner (regular season)
+        if game_types is not None:
+            gtypes = last.game_pk.map(game_types)
+        else:
+            gtypes = pd.Series("R", index=last.index)
+        last["on_2b"] = (last.inning >= 10) & (gtypes == "R")
         last["checkpoint"] = True
-        rows.append(last)
-    s = pd.concat(rows, ignore_index=True)
-    # drop the game's final PA (and any checkpoint derived from it): no decision left
+    
+    s = pd.concat([p[p.outs < 3], last], ignore_index=True) if len(last) else p[p.outs < 3].copy()
+    
+    # drop the game's final PA (no decision left)
     last_idx = s.game_pk.map(p.groupby("game_pk").play_idx.max())
-    s = s[s.play_idx != last_idx]
-    s["outs"] = s.outs.where(s.outs < 3, 0)  # 3-out PA rows: state is really the next half's start
+    s = s[s.play_idx != last_idx].copy()
     s["bases"] = (s.on_1b.astype(int) + 2 * s.on_2b.astype(int) + 4 * s.on_3b.astype(int))
     s["state_ts"] = s.end_ts
     return s.drop(columns=["on_1b", "on_2b", "on_3b"])
@@ -96,8 +98,11 @@ def build_panel(sport: str = "mlb") -> None:
         f = d / "trades" / f"{pk}.parquet"
         if not f.exists():
             return None
-        g = pd.read_parquet(f, columns=["timestamp", "home_p"]).sort_values("timestamp")
-        return g.timestamp.to_numpy(float) - TRADE_TS_LAG_S, g.home_p.to_numpy(float)
+        g = pd.read_parquet(f, columns=["timestamp", "home_p", "size", "side"]).sort_values("timestamp")
+        return (g.timestamp.to_numpy(float) - TRADE_TS_LAG_S, 
+                g.home_p.to_numpy(float), 
+                g["size"].to_numpy(float), 
+                g.side.to_numpy(str))
 
     # ---- pregame
     pre = []
@@ -111,7 +116,7 @@ def build_panel(sport: str = "mlb") -> None:
         p_tr, n_tr = np.nan, 0
         t = tr_of(g.game_pk)
         if t is not None:
-            tts, tv = t
+            tts, tv, _, _ = t
             m = (tts >= fp - PREGAME_WIN_S) & (tts < fp)
             n_tr = int(m.sum())
             if n_tr:
@@ -125,7 +130,7 @@ def build_panel(sport: str = "mlb") -> None:
     _write(pregame, d / "pregame.parquet")
 
     # ---- in-game panel
-    st = state_rows(plays[plays.game_pk.isin(games.game_pk)])
+    st = state_rows(plays[plays.game_pk.isin(games.game_pk)], games.set_index("game_pk")["game_type"])
     st = st.merge(pregame[["game_pk", "event_date", "fee_rate", "home_won_final", "pre_p", "volume"]],
                   on="game_pk")
     parts = []
@@ -133,22 +138,47 @@ def build_panel(sport: str = "mlb") -> None:
         ts, v = px_of(pk)
         q = g.state_ts.to_numpy(float)
         g = g.copy()
-        g["mkt_p_bar"] = _asof(ts, v, q + SETTLE_S)
-        g["mkt_p_trades"], g["mkt_n_trades"] = np.nan, 0
+        g["decision_ts"] = q
+        g["mkt_p_bar"] = _asof(ts, v, q) # causal bar
+
+    # mkt_p: causal reference (last fill strictly before decision_ts)
+    # mkt_ts: timestamp of the causal reference
+    # mkt_staleness: seconds since mkt_ts
+    # mkt_size: size of the causal reference fill
+    # mkt_side: side of the causal reference fill ("BUY" or "SELL")
+    # exec_p: execution proxy (first fill strictly after decision_ts + EXEC_DELAY_S)
+    # exec_ts: timestamp of the execution proxy fill
+    # exec_size: size of the execution proxy fill
+    # exec_side: side of the execution proxy fill ("BUY" or "SELL")
+        
+        g["mkt_p"], g["mkt_ts"], g["mkt_staleness"] = np.nan, np.nan, np.nan
+        g["mkt_size"], g["mkt_side"] = np.nan, ""
+        g["exec_p"], g["exec_ts"] = np.nan, np.nan
+        g["exec_size"], g["exec_side"] = np.nan, ""
+        
         t = tr_of(pk)
         if t is not None:
-            tts, tv = t
-            lo = np.searchsorted(tts, q + 15)
-            hi = np.searchsorted(tts, q + 75)
-            g["mkt_p_trades"] = [float(np.median(tv[a:b])) if b > a else np.nan for a, b in zip(lo, hi)]
-            g["mkt_n_trades"] = hi - lo
+            tts, tv, tsize, tside = t
+            idx_before = np.searchsorted(tts, q, side="left") - 1
+            valid_before = idx_before >= 0
+            
+            g["mkt_p"] = np.where(valid_before, tv[np.clip(idx_before, 0, None)], np.nan)
+            g["mkt_ts"] = np.where(valid_before, tts[np.clip(idx_before, 0, None)], np.nan)
+            g["mkt_staleness"] = q - g["mkt_ts"]
+            g["mkt_size"] = np.where(valid_before, tsize[np.clip(idx_before, 0, None)], np.nan)
+            g["mkt_side"] = np.where(valid_before, tside[np.clip(idx_before, 0, None)], "")
+            
+            idx_after = np.searchsorted(tts, q + EXEC_DELAY_S, side="right")
+            valid_after = idx_after < len(tts)
+            
+            g["exec_p"] = np.where(valid_after, tv[np.clip(idx_after, 0, len(tts)-1)], np.nan)
+            g["exec_ts"] = np.where(valid_after, tts[np.clip(idx_after, 0, len(tts)-1)], np.nan)
+            g["exec_size"] = np.where(valid_after, tsize[np.clip(idx_after, 0, len(tts)-1)], np.nan)
+            g["exec_side"] = np.where(valid_after, tside[np.clip(idx_after, 0, len(tts)-1)], "")
+            
         parts.append(g)
     panel = pd.concat(parts, ignore_index=True)
-    # market price for a state = median fill 15-75s after the play (what was actually traded).
-    # No bar fallback: with no fills the 1-min bar can sit frozen for innings (e.g. 0.54 while a
-    # team leads by 10), which fabricates "edges" nobody could trade. Such states are dropped.
-    panel["mkt_p"] = panel.mkt_p_trades.where(panel.mkt_n_trades >= MIN_TRADES)
-    # stale bars after resolution (price pinned at 0/1) are not tradable states
+    # stale states are dropped
     panel = panel[panel.mkt_p.between(0.005, 0.995)]
     _write(panel, d / "panel.parquet")
     log.info("pregame rows %d, panel rows %d (%d checkpoints)", len(pregame), len(panel),
@@ -160,7 +190,13 @@ def build_panel(sport: str = "mlb") -> None:
     if len(all_plays):
         finals = all_plays.sort_values("play_idx").groupby("game_pk").last()
         winner = (finals.home_score > finals.away_score).rename("home_won_final")
-        b = state_rows(all_plays).merge(winner, left_on="game_pk", right_index=True)
+        sched_files = list((d / "mlb_only").glob("schedule_*.parquet"))
+        all_games_dfs = [games]
+        if sched_files:
+            all_games_dfs.append(pd.read_parquet(sched_files[0]))
+        all_games = pd.concat(all_games_dfs, ignore_index=True).drop_duplicates("game_pk")
+        game_types = all_games.set_index("game_pk")["game_type"]
+        b = state_rows(all_plays, game_types).merge(winner, left_on="game_pk", right_index=True)
         b = b[finals.loc[b.game_pk].home_score.values != finals.loc[b.game_pk].away_score.values]
         b["season"] = pd.to_datetime(b.start_ts, unit="s").dt.year
         _write(b, d / "baseline.parquet")
