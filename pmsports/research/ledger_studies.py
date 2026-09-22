@@ -1,344 +1,313 @@
-"""Per-trade ledgers for the studies run before the Thorp hypothesis hunt.
+"""Full cash-allocation audits for pre-Thorp studies; no synthetic stake rescaling.
 
-python -m pmsports.research.ledger_studies  ->  data/research/ledgers/<slug>.json
-Format: pmsports/research/LEDGER_SPEC.md. Rows are the actual bets each study made.
+Run only after rebuilding the corrected inputs. A stale execution schema is an error,
+not permission to manufacture entry prices. H1 itself is descriptive, so its ledger
+contains reference observations with zero invested capital and an explicit status.
 """
 from __future__ import annotations
 
 import json
 import logging
-
 import numpy as np
 import pandas as pd
 
-from ..analysis.favorites import PREGAME_MIN_USD, favorite_bets
+from ..analysis.favorites import PREGAME_MIN_USD, favorite_bets, cached_pregame_prices
 from ..analysis.thresholds import _prior_season_fair
 from ..collect import DATA_DIR, sport_dir
+from ..execution import panel_entries
 from ..polymarket import taker_fee
 from .common import RESEARCH, cluster_ci
 
 log = logging.getLogger("pmsports")
 OUT = RESEARCH / "ledgers"
-COLUMNS = ["id", "period", "date", "sport", "league", "event", "market", "side", "entry_ts", "entry_price",
-           "stake_usd", "fee_usd", "exit_kind", "exit_ts", "exit_price", "payout", "pnl_usd", "roi", "note"]
-STAKE = 100.0           # flat $100 per bet, so P&L columns read as dollars
 SPLIT_TS = pd.Timestamp("2026-01-01", tz="UTC").timestamp()
-MAX_ROWS = 20_000
+COLUMNS = ["id", "period", "date", "sport", "league", "event", "market", "side", "entry_ts", "entry_price",
+           "stake_usd", "fee_usd", "exit_kind", "exit_ts", "exit_price", "payout", "pnl_usd", "roi", "note",
+           "signal_ts", "receipt_ts", "eligible_ts", "expiry_ts", "shares", "cost_usd", "print_id", "status",
+           "reference_price"]
+CASH = ["shares", "stake_usd", "fee_usd", "cost_usd", "payout", "pnl_usd", "roi"]
+
+
+def validate_cash(df: pd.DataFrame) -> None:
+    """Fail closed when rows predate allocations or their cash identities disagree."""
+    missing = set(CASH + ["entry_price", "status"]) - set(df)
+    if missing:
+        raise ValueError(f"legacy execution schema; rebuild study (missing {sorted(missing)})")
+    if df.empty:
+        return
+    if not np.isfinite(df[CASH[:-1]].to_numpy(float)).all():
+        raise ValueError("nonfinite cash allocation")
+    if (df[["shares", "stake_usd", "fee_usd", "cost_usd", "payout"]] < -1e-10).any().any():
+        raise ValueError("negative shares, cash or payout")
+    for actual, expected in ((df.cost_usd, df.stake_usd + df.fee_usd),
+                             (df.pnl_usd, df.payout - df.cost_usd)):
+        if not np.allclose(actual, expected, rtol=1e-8, atol=1e-8):
+            raise ValueError("cash identity mismatch")
+    filled = df.cost_usd > 0
+    if not df.loc[filled, "entry_price"].between(0,1,inclusive="neither").all() or not df.loc[filled, "shares"].gt(0).all():
+        raise ValueError("filled row has an invalid price or share count")
+    if not np.isfinite(df.loc[filled, ["entry_price", "roi"]].to_numpy(float)).all():
+        raise ValueError("filled row has no finite entry/ROI")
+    if not np.allclose(df.loc[filled, "stake_usd"], df.loc[filled, "shares"] * df.loc[filled, "entry_price"], rtol=1e-8, atol=1e-8):
+        raise ValueError("entry stake does not match consumed shares")
+    if not np.allclose(df.loc[filled, "roi"], df.loc[filled, "pnl_usd"] / df.loc[filled, "cost_usd"], rtol=1e-8, atol=1e-8):
+        raise ValueError("ROI must include entry fees in capital")
+    if not np.allclose(df.loc[~filled, ["shares", "stake_usd", "fee_usd", "payout", "pnl_usd"]], 0):
+        raise ValueError("unfilled row contains an invested position")
+    if df.loc[~filled, "roi"].notna().any():
+        raise ValueError("zero-capital ROI is undefined")
+    if df.loc[~filled,"status"].isin(["filled","partial"]).any():
+        raise ValueError("zero-capital row claims a fill")
+    if not df.loc[filled, "status"].isin(["filled", "partial"]).all():
+        raise ValueError("position status disagrees with allocated capital")
+
+
+def _headline(trades):
+    head = {}
+    for period, signals in trades.groupby("period"):
+        g = signals[signals.cost_usd > 0]
+        roi, lo, hi = cluster_ci(g.roi, g.event, weights=g.cost_usd) if len(g) else (np.nan,) * 3
+        head[period] = dict(signals=len(signals), bets=len(g), unfilled=int(signals.cost_usd.eq(0).sum()),
+            descriptive=int(signals.status.eq("descriptive_only").sum()), partial=int(signals.status.eq("partial").sum()),
+            roi=roi, ci_lo=lo, ci_hi=hi, pnl_usd=float(g.pnl_usd.sum()), capital_usd=float(g.cost_usd.sum()))
+    return head
 
 
 def _rows(df: pd.DataFrame) -> list[list]:
-    df = df.sort_values("entry_ts").reset_index(drop=True)
-    df.insert(0, "id", np.arange(1, len(df) + 1))
-    df["date"] = pd.to_datetime(df.entry_ts, unit="s", utc=True).dt.strftime("%Y-%m-%d")
-    out = df[COLUMNS].copy()
-    for c in ("entry_price", "stake_usd", "fee_usd", "exit_price", "payout", "pnl_usd", "roi"):
-        out[c] = out[c].astype(float).round(6)
-    return json.loads(out.to_json(orient="values"))
+    df = df.copy().sort_values(["signal_ts", "entry_ts"], kind="stable").reset_index(drop=True)
+    df["id"] = np.arange(1, len(df) + 1)
+    df["date"] = pd.to_datetime(df.signal_ts.fillna(df.entry_ts), unit="s", utc=True).dt.strftime("%Y-%m-%d")
+    for col in COLUMNS:
+        if col not in df:
+            df[col] = None
+    return json.loads(df[COLUMNS].to_json(orient="values", double_precision=15))
 
 
-def _sample(df: pd.DataFrame, seed: int = 0) -> tuple[pd.DataFrame, bool]:
-    if len(df) <= MAX_ROWS:
-        return df, False
-    hold = df[df.period == "holdout"]
-    dev = df[df.period == "dev"]
-    share = MAX_ROWS // 2 if (len(hold) and len(dev)) else MAX_ROWS
-    if len(hold) > share:
-        hold = hold.sample(share, random_state=seed)
-    keep = max(MAX_ROWS - len(hold), 1000)
-    if len(dev) > keep:
-        dev = dev.sample(keep, random_state=seed)
-    return pd.concat([dev, hold]), True
+def _sample(df: pd.DataFrame, seed: int = 0):
+    """Compatibility name; server ledgers never sample away observations."""
+    return df, False
 
 
-def _write(meta: dict, trades: pd.DataFrame) -> None:
-    head = {}
-    for period, g in trades.groupby("period"):      # headline on EVERY trade, before sampling
-        roi, lo, hi = cluster_ci(g.roi, g.event, weights=g.stake_usd)
-        head[period] = {"bets": int(len(g)), "roi": round(float(roi), 5), "ci_lo": round(float(lo), 5),
-                        "ci_hi": round(float(hi), 5), "pnl_usd": round(float(g.pnl_usd.sum()), 2)}
-    trades, truncated = _sample(trades)
-    doc = {**meta, "headline": head, "truncated": truncated, "n_total_trades": int(meta.pop("_n_total")),
-           "columns": COLUMNS, "rows": _rows(trades)}
+def _document(meta, trades):
+    validate_cash(trades)
+    head = json.loads(pd.Series(_headline(trades)).to_json(double_precision=15))
+    return {**{k:v for k,v in meta.items() if not k.startswith("_")}, "headline": head,
+            "truncated": False, "n_total_trades": len(trades), "columns": COLUMNS, "rows": _rows(trades)}
+
+
+def _write(meta: dict, trades: pd.DataFrame) -> dict:
+    doc = _document(meta, trades)
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"{meta['slug']}.json").write_text(json.dumps(doc, separators=(",", ":")))
-    log.info("%s: %d rows%s  %s", meta["slug"], len(trades), " (sampled)" if truncated else "",
-             {k: v["roi"] for k, v in head.items()})
+    target = OUT / f"{meta['slug']}.json"
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(doc, separators=(",", ":"), allow_nan=False))
+    tmp.replace(target)
+    log.info("%s: %d signal rows, no truncation", meta["slug"], len(trades))
+    return doc
 
 
-def _period(ts) -> np.ndarray:
+def _period(ts):
     return np.where(np.asarray(ts) < SPLIT_TS, "dev", "holdout")
 
 
-# ----------------------------------------------------------------------------- all-sports pregame
+def _meta(slug, title, source, report, entry, sport="multi", extra=()):
+    return dict(slug=slug, title=title, group="MLB studies" if sport == "baseball" else "All-sports studies",
+        sport=sport, verdict="UNVALIDATED", hypothesis=title, mechanism="Historical signal evaluation",
+        entry_rule=entry, exit_rule="Held to resolution when filled; no mean-reversion exit simulated",
+        cost_model="Historical fee on actual allocated shares; ROI denominator includes fees",
+        periods={"dev":"before2026-01-01", "holdout":"2026 onward, historically explored"},
+        caveats=["Later transactions are price/capacity proxies, not resting book quotes",
+                 "Receipt latency is unobserved; first-print sizes may not imply admissible venue orders",
+                 "Every signal/no-fill retained; historical universe/tape coverage is incomplete",
+                 "Previously explored evaluation periods are not fresh confirmation", *extra],
+        report_path=report, code_path=source)
 
-def _favorites_frame() -> pd.DataFrame:
-    m = pd.read_parquet(DATA_DIR / "wallets" / "pregame_prices.parquet")
+
+def _favorites_frame():
+    m = cached_pregame_prices()
+    required = {"decision_ts", "entry_delay_s", "entry_size0", "entry_size1", "entry_ts0", "entry_ts1", "execution"}
+    if not required.issubset(m) or not m.execution.eq("first_later_print_partial_proxy").all():
+        raise ValueError("pregame cache predates causal execution; regenerate favorites")
     b = favorite_bets(m)
     return b[b.pre_usd >= PREGAME_MIN_USD].copy()
 
 
-def favorites_ledger(side: str = "favorite") -> None:
+def favorites_ledger(side="favorite"):
+    if side not in ("favorite", "underdog"):
+        raise ValueError("side must be favorite or underdog")
     b = _favorites_frame()
-    if side == "underdog":
-        b = b[(b.kind == "two-way") & b.dog_ask.notna()].copy()
-        price = np.maximum(b.dog_ask, 1 - b.fav_p)             # executable ask for the dog
-        won = 1 - b.fav_won
-        name = np.where(b.p0 >= 0.5, b.o1, b.o0)
-        slug, title = "underdog_all_sports", "Bet every pregame underdog (all sports)"
-    else:
-        price = np.where(b.fav_ask.notna(), np.maximum(b.fav_ask, b.fav_p), b.fav_p + 0.01)
-        won = b.fav_won
-        name = np.where(b.p0 >= 0.5, b.o0, b.o1)
-        slug, title = "favorites_all_sports", "Bet every pregame favorite (all sports)"
-    fee = taker_fee(STAKE / price, price, b.fee_rate.fillna(0).to_numpy())
-    shares = STAKE / price
-    payout = shares * won.to_numpy(float)
-    t = pd.DataFrame({
-        "period": _period(b.game_start_ts), "sport": b.family, "league": b.league, "event": b.event_slug,
-        "market": b.market_slug, "side": name, "entry_ts": b.game_start_ts.astype("int64"),
-        "entry_price": price, "stake_usd": STAKE, "fee_usd": fee, "exit_kind": "resolution",
-        "exit_ts": b.closed_ts.fillna(b.game_start_ts).astype("int64"), "exit_price": won.to_numpy(float),
-        "payout": payout, "pnl_usd": payout - STAKE - fee,
-        "note": ["fav " + f"{p:.0%}" + (" (3-way: draw loses)" if k != "two-way" else "")
-                 for p, k in zip(b.fav_p, b.kind)]})
-    t["roi"] = t.pnl_usd / t.stake_usd
-    meta = {
-        "slug": slug, "title": title, "group": "All-sports studies",
-        "sport": "multi", "verdict": "DEAD",
-        "hypothesis": ("Favorites win most games, so backing them (or, mirrored, backing underdogs) at the "
-                       "pregame price and holding to the end should pay."),
-        "mechanism": ("If the market misprices team strength systematically, one side wins more often than "
-                      "its price implies. The price is the odds, so only that gap is edge."),
-        "entry_rule": ("One bet per game at the scheduled start, on the side priced above (favorite) or below "
-                       "(underdog) 50c. Entry price = the price takers actually paid for that side in the last "
-                       "10 minutes before the start (executable ask), floored at the pregame mid. Flat $100."),
-        "exit_rule": "Held to resolution: payout $1/share if that side won, $0 if it lost, $0.50 on a void.",
-        "cost_model": "Polymarket taker fee at the market's own rate (0 in 2025, 3% Mar-Jun 2026, 5% since Jul 2026).",
-        "periods": {"dev": "2025-01-01..2025-12-31", "holdout": "2026-01-01..2026-09-18"},
-        "review": ("An earlier version selected games on TOTAL volume, which includes in-play trading; upsets "
-                   "draw more in-play volume, so that made underdogs look +3% to +9% profitable. Selecting only "
-                   "on pregame volume (>= $25k) removes the illusion."),
-        "caveats": ["Selection uses pregame volume only, never total volume or outcome.",
-                    "3-way soccer legs are Yes/No 'will X win' markets: a draw loses.",
-                    "Thresholds (>=50c ... >=90c) are filters over this same ledger: filter on the note/fav price."],
-        "report_path": "reports/FAVORITES.md", "code_path": "pmsports/analysis/favorites.py",
-        "_n_total": len(t)}
-    _write(meta, t)
+    dog = side == "underdog"
+    if dog:
+        b = b[b.kind == "two-way"].copy()  # counterpart of a three-way Yes is not the other team
+    prefix = "dog" if dog else "fav"
+    price = b[f"{prefix}_ask"]
+    size = b[f"{prefix}_entry_size"]
+    fill_ts = b[f"{prefix}_entry_ts"]
+    budget = b[f"{prefix}_stake"]
+    valid = budget.gt(0) & price.notna()
+    if not (fill_ts[valid] > (b.decision_ts + b.entry_delay_s)[valid]).all() or not (fill_ts[valid] < b.game_start_ts[valid]).all():
+        raise ValueError("pregame entry is outside its causal execution window")
+    if not np.isfinite(b.loc[valid, "fee_rate"]).all() or (b.loc[valid, "fee_rate"] < 0).any():
+        raise ValueError("pregame execution fee unknown")
+    fee1 = taker_fee(1., price, b.fee_rate)
+    shares = np.where(valid, budget / (price + fee1), 0.)
+    if (shares > size.to_numpy() + 1e-8).any():
+        raise ValueError("pregame allocation exceeds observed first print")
+    won = 1 - b.fav_won if dog else b.fav_won
+    stake = pd.Series(shares, index=b.index).mul(price).fillna(0)
+    fees = pd.Series(shares, index=b.index).mul(fee1).fillna(0)
+    cost = stake + fees
+    name = np.where(b.p0 >= .5, b.o1 if dog else b.o0, b.o0 if dog else b.o1)
+    t = pd.DataFrame(dict(period=_period(b.decision_ts), sport=b.family, league=b.league, event=b.event_slug,
+        market=b.market_slug, side=name, signal_ts=b.decision_ts, receipt_ts=b.decision_ts,
+        eligible_ts=b.decision_ts + b.entry_delay_s, expiry_ts=b.game_start_ts,
+        entry_ts=fill_ts.where(valid), entry_price=price.where(valid), shares=shares, stake_usd=stake,
+        fee_usd=fees, cost_usd=cost, exit_kind="resolution", exit_ts=b.closed_ts, exit_price=won,
+        payout=shares * won, pnl_usd=shares * won - cost,
+        roi=np.where(cost > 0, (shares * won - cost) / cost, np.nan),
+        status=np.where(cost <= 0,"unfilled",np.where(cost >= 100-1e-8,"filled","partial")),
+        reference_price=1-b.fav_p if dog else b.fav_p, note="First later same-side print; no fallback quote; partial allocation"))
+    slug = "underdog_all_sports" if dog else "favorites_all_sports"
+    return _write(_meta(slug, f"Pregame {side}s across sports", "pmsports/analysis/favorites.py", "reports/FAVORITES.md",
+        "Decision10min before scheduled start from prior-hour prices; first actual same-side print strictly after delay;100 inclusive-dollar target capped by print shares",
+        extra=("Strictly prior observed pregame volume floor remains a legacy-coverage sensitivity",)), t)
 
 
-# ----------------------------------------------------------------------------- MLB pregame favorites
-
-def mlb_favorites_ledger() -> None:
-    p = pd.read_parquet(sport_dir("mlb") / "pregame.parquet").dropna(subset=["pre_p", "home_won_final"])
-    p = p[p.pre_p.between(0.02, 0.98)].copy()
-    fav_home = p.pre_p >= 0.5
-    price = np.maximum(p.pre_p, 1 - p.pre_p).to_numpy() + 0.01           # + 1c slippage
-    won = np.where(fav_home, p.home_won_final.astype(float), 1 - p.home_won_final.astype(float))
-    shares = STAKE / price
-    fee = taker_fee(shares, price, p.fee_rate.fillna(0).to_numpy())
-    payout = shares * won
-    t = pd.DataFrame({
-        "period": _period(p.first_pitch_ts), "sport": "baseball", "league": "mlb", "event": p.slug,
-        "market": p.slug, "side": np.where(fav_home, p.home_team, p.away_team),
-        "entry_ts": p.first_pitch_ts.astype("int64"), "entry_price": price, "stake_usd": STAKE,
-        "fee_usd": fee, "exit_kind": "resolution", "exit_ts": p.first_pitch_ts.astype("int64") + 10800,
-        "exit_price": won, "payout": payout, "pnl_usd": payout - STAKE - fee,
-        "note": [f"fav {q:.0%} at first pitch" for q in np.maximum(p.pre_p, 1 - p.pre_p)]})
-    t["roi"] = t.pnl_usd / t.stake_usd
-    meta = {
-        "slug": "mlb_pregame_favorites", "title": "MLB: bet every pregame favorite", "group": "MLB studies",
-        "sport": "baseball", "verdict": "DEAD",
-        "hypothesis": "Do MLB favorites win more often than their price implies? ('We only need 51/49.')",
-        "mechanism": "Retail money leans to favorites, which would leave them overpriced.",
-        "entry_rule": ("One bet per game on the side priced above 50c, at the median traded price in the 10 "
-                       "minutes before the actual first pitch, plus 1c slippage. Flat $100."),
-        "exit_rule": "Held to the final out.",
-        "cost_model": "Taker fee at the market's own rate; 1c slippage included in entry_price.",
-        "periods": {"dev": "2025 season", "holdout": "2026 season"},
-        "review": ("Polymarket clears the book at first pitch and prints a glitch bar (0.50 or an empty-book "
-                   "mid) at that minute; using it made favorites look 20 points overpriced. Prices here come "
-                   "from actual fills."),
-        "caveats": ["Favorites won 56.1% at an average price of 57.4%: the gap, not the win rate, is the edge."],
-        "report_path": "reports/REPORT.md", "code_path": "pmsports/analysis/hypotheses.py",
-        "_n_total": len(t)}
-    _write(meta, t)
+def _mlb_games():
+    from ..panel import _match_cached_contracts
+    d = sport_dir("mlb")
+    g = pd.read_parquet(d / "games.parquet")
+    g = g[g.game_pk.notna() & ~g.resolution_mismatch].copy()
+    g["game_pk"] = g.game_pk.astype(int)
+    return _match_cached_contracts(g,d/"trades").set_index("game_pk")
 
 
-# ----------------------------------------------------------------------------- MLB in-game rules
-
-def _mlb_slugs() -> pd.Series:
-    g = pd.read_parquet(sport_dir("mlb") / "games.parquet", columns=["game_pk", "slug"]).dropna(subset=["game_pk"])
-    g = g.drop_duplicates("game_pk")
-    return pd.Series(g.slug.to_numpy(), index=g.game_pk.astype(int).to_numpy())
+def _mlb_slugs():
+    return _mlb_games().slug
 
 
-def _mlb_checkpoints() -> pd.DataFrame:
+def mlb_favorites_ledger():
+    """H1 is price calibration, not an executed strategy; retain its observations."""
+    p = pd.read_parquet(sport_dir("mlb") / "pregame.parquet").dropna(subset=["pre_p","home_won_final"])
+    p = p[p.pre_p.between(.02,.98)].copy()
+    home = p.pre_p >= .5
+    won = np.where(home,p.home_won_final.astype(float),1-p.home_won_final.astype(float))
+    t = pd.DataFrame(dict(period=_period(p.first_pitch_ts),sport="baseball",league="mlb",event=p.slug,
+        market=p.slug,side=np.where(home,p.home_team,p.away_team),signal_ts=p.first_pitch_ts,
+        entry_ts=np.nan,entry_price=np.nan,shares=0.,stake_usd=0.,fee_usd=0.,cost_usd=0.,
+        exit_kind="descriptive outcome",exit_ts=p.game_pk.map(_mlb_games().closed_ts),exit_price=won,
+        payout=0.,pnl_usd=0.,roi=np.nan,status="descriptive_only",reference_price=np.maximum(p.pre_p,1-p.pre_p),
+        note="H1 descriptive price calibration; no observed execution, invested capital or realized trading profit"))
+    meta = _meta("mlb_pregame_favorites","MLB pregame favorite calibration (descriptive)",
+        "pmsports/analysis/hypotheses.py","reports/REPORT.md","No order simulated; reference price is the H1 pregame descriptive median/bar",sport="baseball")
+    meta["verdict"],meta["cost_model"],meta["exit_rule"] = "DESCRIPTIVE","No allocated capital; synthetic cost benchmarks are not trades","Outcome observation only"
+    return _write(meta,t)
+
+
+def _panel_inputs():
     d = sport_dir("mlb")
     panel = pd.read_parquet(d / "panel.parquet")
-    base = pd.read_parquet(d / "baseline.parquet")
-    p = panel[panel.checkpoint & panel.mkt_p.notna() & (panel["diff"] != 0)].copy()
-    p = p.sort_values(["game_pk", "state_ts"]).reset_index(drop=True)
-    p["fair_home"] = _prior_season_fair(p, base)
+    required = {"decision_ts","state_expiry_ts","mkt_staleness"} | {f"exec_{side}_{c}" for side in ("home","away") for c in ("p","ts","size","id")}
+    if not required.issubset(panel):
+        raise ValueError("MLB panel predates side-specific causal execution; rebuild panel")
+    return panel,pd.read_parquet(d / "baseline.parquet")
+
+
+def _mlb_checkpoints():
+    panel,base = _panel_inputs()
+    p = panel[panel.checkpoint & panel.mkt_p.notna() & panel.mkt_staleness.le(120) & panel["diff"].ne(0)].copy()
+    p = p.sort_values(["game_pk","state_ts"]).reset_index(drop=True)
+    p["fair_home"] = _prior_season_fair(p,base)
     hl = p["diff"] > 0
-    won = p.home_won_final.astype(float)
-    p["price_leader"] = np.where(hl, p.mkt_p, 1 - p.mkt_p)
-    p["fair_leader"] = np.where(hl, p.fair_home, 1 - p.fair_home)
-    p["leader_won"] = np.where(hl, won, 1 - won)
-    p["leader_is_home"] = hl
-    p["lead"] = p["diff"].abs()
+    p["price_leader"] = np.where(hl,p.mkt_p,1-p.mkt_p)
+    p["fair_leader"] = np.where(hl,p.fair_home,1-p.fair_home)
+    p["leader_won"] = np.where(hl,p.home_won_final.astype(float),1-p.home_won_final.astype(float))
+    p["leader_is_home"],p["lead"] = hl,p["diff"].abs()
     return p
 
 
-def mlb_inning_discount_ledger(discount: float = 0.03) -> None:
+def _mlb_rows(sig,buy_home,note):
+    r = panel_entries(sig,buy_home,slip=.01,event_cap_usd=100.).reset_index(drop=True)
+    sig = sig.reset_index(drop=True)
+    games = _mlb_games()
+    slug = sig.game_pk.map(games.slug).fillna("mlb-game-"+sig.game_pk.astype(str))
+    r["period"],r["sport"],r["league"] = _period(sig.decision_ts),"baseball","mlb"
+    r["event"],r["market"],r["side"] = slug,slug,np.where(buy_home,"home","away")
+    r["entry_ts"],r["exit_kind"],r["exit_ts"],r["exit_price"] = r.fill_ts,"resolution",sig.game_pk.map(games.closed_ts),r.y
+    r["reference_price"] = np.where(buy_home,sig.mkt_p,1-sig.mkt_p)
+    r["note"] = note
+    return r
+
+
+def mlb_inning_discount_ledger(discount=.03):
     p = _mlb_checkpoints()
-    sig = p[p.fair_leader - p.price_leader >= discount].groupby("game_pk").head(1).copy()
-    slug = sig.game_pk.astype(int).map(_mlb_slugs()).fillna("mlb-game-" + sig.game_pk.astype(int).astype(str))
-    price = sig.price_leader.to_numpy() + 0.01
-    shares = STAKE / price
-    fee = taker_fee(shares, price, sig.fee_rate.fillna(0).to_numpy())
-    payout = shares * sig.leader_won.to_numpy()
-    t = pd.DataFrame({
-        "period": _period(sig.state_ts), "sport": "baseball", "league": "mlb", "event": slug,
-        "market": slug, "side": np.where(sig.leader_is_home, "home (leading)", "away (leading)"),
-        "entry_ts": sig.state_ts.astype("int64"), "entry_price": price, "stake_usd": STAKE, "fee_usd": fee,
-        "exit_kind": "resolution", "exit_ts": sig.state_ts.astype("int64") + 5400,
-        "exit_price": sig.leader_won.to_numpy(), "payout": payout, "pnl_usd": payout - STAKE - fee,
-        "note": [f"top {int(i)}th, lead {int(l)}: history {f:.0%} vs price {q:.0%}"
-                 for i, l, f, q in zip(sig.inning, sig.lead, sig.fair_leader, sig.price_leader)]})
-    t["roi"] = t.pnl_usd / t.stake_usd
-    meta = {
-        "slug": "mlb_inning_discount", "title": "MLB: buy the leader when it trades below its historical win rate",
-        "group": "MLB studies", "sport": "baseball", "verdict": "DEAD",
-        "hypothesis": ("'Up 3 going into the 9th wins 98% of the time but trades at 93c, so buy it.' Buy the "
-                       f"leading team whenever its price is at least {discount:.0%} below the historical win "
-                       "rate for that inning/lead/home-away state."),
-        "mechanism": ("If the market underweights how safe a lead is, leaders are systematically cheap. The "
-                      "historical rate comes only from seasons BEFORE the game being bet."),
-        "entry_rule": ("At each half-inning start, compare the leader's traded price (median fill 15-75s after "
-                       "the previous half ended) with the historical rate for that state. First time in a game "
-                       f"the gap is >= {discount:.0%}, buy the leader at that price + 1c. Flat $100, one bet per game."),
-        "exit_rule": "Held to the end of the game.",
-        "cost_model": "Taker fee at the market's rate plus 1c slippage.",
-        "periods": {"dev": "2025 season", "holdout": "2026 season"},
-        "review": ("Discounted leaders are nearly always the weaker team (78-98% were pregame underdogs) and "
-                   "they win at about their price, not the historical average. Profitable in fee-free 2025 "
-                   "(+6.0%, CI +1.1% to +10.5%), ~0 in 2026 after fees."),
-        "caveats": ["The historical rate averages over all teams; the price knows which teams are playing.",
-                    "Variants at 2/5/8/10 point discounts are in reports/THRESHOLDS.md."],
-        "report_path": "reports/THRESHOLDS.md", "code_path": "pmsports/analysis/thresholds.py",
-        "_n_total": len(t)}
-    _write(meta, t)
+    sig = p[p.fair_leader-p.price_leader >= discount].drop_duplicates("game_pk").copy()
+    t = _mlb_rows(sig,sig.leader_is_home,"First half-inning signal; later same-side print plus1c sensitivity; optimistic retrospective state clock")
+    return _write(_meta("mlb_inning_discount","MLB leader discount against prior-season state averages",
+        "pmsports/analysis/thresholds.py","reports/THRESHOLDS.md",
+        f"First half-inning signal per game with historical-minus-reference probability >={discount:.0%}; side-specific later print after5s plus1c;100 inclusive-dollar cap",
+        sport="baseball",extra=("5s from retrospective state time is optimistic; pending-order cancellation is not established",)),t)
 
 
-def mlb_fair_value_ledger(threshold: float = 0.02) -> None:
-    """H3: model (pregame odds + game state) vs market; buy the side the model likes."""
+def mlb_fair_value_ledger(threshold=.02):
+    """Match H3 fit/signal selection; use its shared execution adapter, never signal price."""
     import statsmodels.api as sm
-    from ..analysis.hypotheses import _baseline_we, _features
-    d = sport_dir("mlb")
-    panel = pd.read_parquet(d / "panel.parquet")
-    base = pd.read_parquet(d / "baseline.parquet")
-    df = panel.dropna(subset=["mkt_p", "pre_p", "home_won_final"]).copy()
-    df = df[df.pre_p.between(0.02, 0.98)]
-    df["we"] = _baseline_we(base, df, max_season=2025)
+    from ..analysis.hypotheses import _baseline_we,_features
+    panel,base = _panel_inputs()
+    df = panel.dropna(subset=["mkt_p","pre_p","home_won_final"]).copy()
+    df = df[df.pre_p.between(.02,.98) & df.mkt_staleness.le(120)]
+    df["we"] = _baseline_we(base,df,max_season=2025)
     df["y"] = df.home_won_final.astype(float)
-    tr, te = df[df.event_date < "2026-01-01"], df[df.event_date >= "2026-01-01"].copy()
+    tr,te = df[df.event_date < "2026-01-01"],df[df.event_date >= "2026-01-01"].copy()
+    if len(tr) < 1000 or len(te) < 1000:
+        raise ValueError(f"H3 cannot estimate ledger: insufficient rows ({len(tr)}train/{len(te)}test)")
     X = _features(tr)
-    cols = [c for c in X.columns if X[c].std() > 1e-9]
-    fit = sm.Logit(tr.y.to_numpy(), sm.add_constant(X[cols])).fit(disp=0)
-    te["model_p"] = fit.predict(sm.add_constant(_features(te)[cols], has_constant="add"))
-    te["edge"] = te.model_p - te.mkt_p
-    sig = te[te.edge.abs() > threshold].sort_values("state_ts").groupby("game_pk").head(1).copy()
-    slug = sig.game_pk.astype(int).map(_mlb_slugs()).fillna("mlb-game-" + sig.game_pk.astype(int).astype(str))
-    buy_home = sig.edge > 0
-    price = np.where(buy_home, sig.mkt_p, 1 - sig.mkt_p) + 0.01
-    won = np.where(buy_home, sig.y, 1 - sig.y)
-    shares = STAKE / price
-    fee = taker_fee(shares, price, sig.fee_rate.fillna(0).to_numpy())
-    payout = shares * won
-    t = pd.DataFrame({
-        "period": "holdout", "sport": "baseball", "league": "mlb", "event": slug,
-        "market": slug, "side": np.where(buy_home, "home", "away"),
-        "entry_ts": sig.state_ts.astype("int64"), "entry_price": price, "stake_usd": STAKE, "fee_usd": fee,
-        "exit_kind": "resolution", "exit_ts": sig.state_ts.astype("int64") + 5400, "exit_price": won,
-        "payout": payout, "pnl_usd": payout - STAKE - fee,
-        "note": [f"model {mp:.0%} vs market {q:.0%} (inning {int(i)})"
-                 for mp, q, i in zip(sig.model_p, sig.mkt_p, sig.inning)]})
-    t["roi"] = t.pnl_usd / t.stake_usd
-    meta = {
-        "slug": "mlb_fair_value", "title": "MLB: trade toward a fair value that knows team strength",
-        "group": "MLB studies", "sport": "baseball", "verdict": "DEAD",
-        "hypothesis": ("Fit a fair value from the pregame odds plus the game state, then buy whichever side "
-                       "the market has cheaper than the model."),
-        "mechanism": "If the in-game price drifts from what the state and team strength imply, it should revert.",
-        "entry_rule": (f"Model fitted on 2025 only, frozen. In 2026, the first state per game where |model - "
-                       f"market| > {threshold:.0%}, buy the side the model prefers at the traded price + 1c. Flat $100."),
-        "exit_rule": "Held to the end of the game.",
-        "cost_model": "Taker fee at the market's rate plus 1c slippage.",
-        "periods": {"dev": "2025 (model fitting only, no bets)", "holdout": "2026 season"},
-        "review": ("The market forecasts better than the model out of sample (log-loss 0.4947 vs 0.4930 for "
-                   "the model on states, but the stacking coefficient is ~0), and the backtest loses after fees "
-                   "at every threshold."),
-        "caveats": ["Dev period is model fitting, so all rows here are holdout bets.",
-                    "Thresholds 2%..10% all lose; see reports/REPORT.md."],
-        "report_path": "reports/REPORT.md", "code_path": "pmsports/analysis/hypotheses.py",
-        "_n_total": len(t)}
-    _write(meta, t)
+    cols = [c for c in X if X[c].std() > 1e-9]
+    fit = sm.Logit(tr.y.to_numpy(),sm.add_constant(X[cols])).fit(disp=0)
+    te["model_p"] = fit.predict(sm.add_constant(_features(te)[cols],has_constant="add"))
+    te["edge_home"] = te.model_p-te.mkt_p
+    sig = te[te.edge_home.abs() > threshold].sort_values("state_ts",kind="stable").drop_duplicates("game_pk")
+    t = _mlb_rows(sig,sig.edge_home > 0,"H3 frozen2025 fit; first2026 signal; later side-specific print plus1c; settlement exit only")
+    t["period"] = "holdout"  # H3 development rows fit the model and never generate trades
+    return _write(_meta("mlb_fair_value","MLB model-versus-market settlement rule",
+        "pmsports/analysis/hypotheses.py","reports/REPORT.md",
+        f"H3 pregame-plus-state logistic model fit before2026; first signal per game with absolute edge >{threshold:.0%}; later print after5s plus1c;100 inclusive-dollar cap",
+        sport="baseball",extra=("All ledger orders are evaluation observations; development only fits the model",
+            "No literal mean-reversion exit is simulated; state receipt/depth remain unobserved")),t)
 
 
-# ----------------------------------------------------------------------------- copy the sharps
-
-def copy_wallets_ledger(delay: int = 30) -> None:
-    from ..wallets import skill
+def copy_wallets_ledger(delay=30):
+    from ..wallets import skill,study
     from ..wallets.tapes import load_trades
     u = pd.read_parquet(DATA_DIR / "wallets" / "universe.parquet")
+    meta = u.drop_duplicates("condition_id").set_index("condition_id")
     t = load_trades(u)
-    s1 = skill.wallet_stats(skill.positions(t[t.timestamp < SPLIT_TS]))
-    fdr = skill.fdr_survivors(s1[s1.markets >= 30].z).tolist()
+    s1 = skill.wallet_stats(skill.positions(t[study._causal_cutoff(t,SPLIT_TS,meta)]))
+    fdr = skill.fdr_survivors(s1[s1.markets >= study.MIN_MKTS].z).tolist()
     t2 = t[t.timestamp >= SPLIT_TS]
-    rows = t2[t2.proxyWallet.isin(fdr)]
-    mk = t2[t2.condition_id.isin(rows.condition_id.unique())]
-    rows = mk[mk.proxyWallet.isin(fdr)]
-    cp = skill.copy_prices(mk, rows, delays=(delay,))
-    r = skill.copy_returns(cp, delay, stake="proportional")
-    del t, t2, mk, cp
-    price = r[f"q_d{delay}"].to_numpy(float)
-    shares = STAKE / price
-    fee = taker_fee(shares, price, r.fee_rate.fillna(0).to_numpy())
-    payout = shares * r.y.to_numpy(float)
-    led = pd.DataFrame({
-        "period": "holdout", "sport": r.family.astype(str), "league": "",
-        "event": r.event_slug.astype(str), "market": r.condition_id.astype(str),
-        "side": np.where(r.side_idx == 0, "outcome 0", "outcome 1"),
-        "entry_ts": (r.timestamp + delay).astype("int64"), "entry_price": price, "stake_usd": STAKE,
-        "fee_usd": fee, "exit_kind": "resolution", "exit_ts": (r.timestamp + 7200).astype("int64"),
-        "exit_price": r.y.to_numpy(float), "payout": payout, "pnl_usd": payout - STAKE - fee,
-        "note": [f"leader filled at {q:.3f}, copy at {c:.3f} after {delay}s"
-                 for q, c in zip(r.q, price)]})
-    led["roi"] = led.pnl_usd / led.stake_usd
-    meta = {
-        "slug": "copy_skilled_wallets", "title": "Copy the wallets with proven skill",
-        "group": "All-sports studies", "sport": "multi", "verdict": "DEAD",
-        "hypothesis": ("99 wallets had statistically real skill in 2025 (vs ~31 expected by luck). Copy their "
-                       "2026 trades and share the edge."),
-        "mechanism": "If their skill is prediction, a follower should capture most of it.",
-        "entry_rule": (f"When a selected wallet's fill appears, buy the same side at the first OTHER taker "
-                       f"print on that side at least {delay}s later (an executable price). Flat $100."),
-        "exit_rule": "Held to resolution.",
-        "cost_model": "Taker fee at the market's rate; the delayed print is the executable price (no extra slippage).",
-        "periods": {"dev": "2025 (selection only, no bets)", "holdout": "2026"},
-        "review": ("The skill is real but is in-play speed: copying at their own price returns +3.9% "
-                   "(CI +2.1% to +5.9%), +1.1% one second later, +0.2% at 5s and -0.9% at 30s. A wallet is only "
-                   "identifiable after on-chain settlement (~2.6s), so a follower is always late."),
-        "caveats": ["94% of the copied trades are in-play; median leader fill is $4.",
-                    f"This ledger is the {delay}s-delay version; 0/1/2/5s variants are in reports/WALLETS.md.",
-                    "Stake is flattened to $100/trade here; the report also mirrors their sizes."],
-        "report_path": "reports/WALLETS.md", "code_path": "pmsports/wallets/skill.py",
-        "_n_total": len(led)}
-    _write(meta, led)
+    selected = t2[t2.proxyWallet.isin(fdr)]
+    mk = t2[t2.condition_id.isin(selected.condition_id.unique())]
+    cp = skill.copy_prices(mk,selected,delays=(delay,))  # full selected signals, no sample/head cap
+    pref = "prop_"
+    def col(name):
+        return cp[f"{pref}{name}_d{delay}"]
+    price = cp[f"{pref}q_d{delay}"]
+    led = pd.DataFrame(dict(period="holdout",sport=cp.family.astype(str),league="",event=cp.event_slug.astype(str),
+        market=cp.condition_id.astype(str),side=np.where(cp.side_idx == 0,"outcome0","outcome1"),
+        signal_ts=col("signal_ts"),receipt_ts=col("receipt_ts"),eligible_ts=col("eligible_ts"),expiry_ts=col("expiry_ts"),
+        entry_ts=col("fill_ts"),entry_price=price,shares=col("shares"),stake_usd=col("stake_usd"),
+        fee_usd=col("fee_usd"),cost_usd=col("cost_usd"),payout=col("payout"),pnl_usd=col("pnl_usd"),roi=col("roi"),
+        print_id=col("print_id"),status=col("status"),exit_kind="resolution",exit_ts=cp.condition_id.map(meta.closed_ts).astype(float),
+        exit_price=cp.y,reference_price=cp.q,note="Causal FDR selection; proportional1% leader-notional target capped100/event; all no-fills retained"))
+    return _write(_meta("copy_skilled_wallets","Copy historically selected wallets: capped proportional policy",
+        "pmsports/wallets/skill.py","reports/WALLETS.md",
+        f"Rank only trades and settled outcomes known before2026; FDR survivors with >={study.MIN_MKTS}markets; first later other-wallet same-side print strictly after{delay}s;1% leader notional capped100/order/event",
+        extra=("Whole2026 evaluation is one event-cap replay; monthly walk-forward has a different monthly reset scope",
+               "This full FDR-decomposition ledger differs from any event-sampled headline comparison; no execution rows are rescaled")),led)
 
 
-def run() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+def run():
+    logging.basicConfig(level=logging.INFO,format="%(asctime)s %(message)s")
     favorites_ledger("favorite")
     favorites_ledger("underdog")
     mlb_favorites_ledger()
