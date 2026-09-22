@@ -57,8 +57,8 @@ Rules:
   the hypothesis's saved parquet/json in `data/research/h_<slug>/` (or re-run its script).
 - `sum(pnl_usd)` and the stake-weighted `roi` per period MUST reproduce the headline in
   `reports/research/<slug>.md` (state the tolerance if it is not exact and explain why).
-- Sort by `entry_ts`. Cap at 20,000 rows; if you must sample, keep every holdout trade, sample
-  dev deterministically (seeded), set `"truncated": true` and say so in `caveats`.
+- Sort by `entry_ts`. Spec requires complete server ledgers; no silent truncation, no row limits.
+  Full trades both periods, n_total_trades==len(rows). `truncated` MUST be false.
 - For maker strategies where a "trade" is a fill, one row per fill; if fills are aggregated per
   market, say so in `exit_rule` and `note`.
 - If a strategy has several variants, export the **pre-registered primary** one, and mention the

@@ -46,7 +46,9 @@
     });
     $("rail").innerHTML = order.map(function (g) {
       return '<section class="rail-group"><h3>' + esc(g || "Other") + "</h3>" + groups[g].map(function (d) {
-        var h = (d.headline || {}), best = h.holdout || h.dev || {};
+        var sp = (S.tab === "other" || S.tab === "all") ? "all" : S.tab;
+        var h = (d.kpis && d.kpis[sp]) ? d.kpis[sp] : (d.headline || {});
+        var best = h.holdout || h.dev || {};
         var n = S.tab === "all" ? d.n_total_trades : ((d.sport_counts || {})[S.tab] || d.n_total_trades);
         return '<button class="item" data-slug="' + esc(d.slug) + '" aria-pressed="' + (d.slug === S.slug) + '">' +
           "<span>" + esc(d.title) + '</span><span class="chip ' + vclass(d.verdict) + '">' + esc(d.verdict) + "</span>" +
@@ -67,7 +69,11 @@
 
   function loadStrategy(slug) {
     $("main").innerHTML = '<div class="loading">Loading strategy…</div>';
-    api("/api/strategy/" + slug).then(function (d) { S.meta = d; renderStrategy(); loadTrades(); });
+    var curSlug = slug;
+    api("/api/strategy/" + slug).then(function (d) {
+      if (S.slug !== curSlug) return;
+      S.meta = d; renderStrategy(); loadTrades();
+    });
   }
 
   function qs() {
@@ -76,14 +82,29 @@
   }
 
   function loadTrades() {
+    var curSlug = S.slug;
     var url = "/api/strategy/" + S.slug + "/trades" + qs() + "&offset=" + S.offset + "&limit=" + S.limit +
       "&sort=" + S.sort + "&desc=" + (S.desc ? "true" : "false");
-    api(url).then(function (p) { S.page = p; renderTable(); });
-    api("/api/strategy/" + S.slug + "/equity" + qs()).then(drawChart);
+    api(url).then(function (p) { if (S.slug === curSlug) { S.page = p; renderTable(); } });
+    api("/api/strategy/" + S.slug + "/equity" + qs()).then(function(d) { if (S.slug === curSlug) drawChart(d); });
+  }
+
+  function updateKPIs() {
+    if (!$("kpisBox") || !S.meta) return;
+    var idxEntry = S.index.find(function(x) { return x.slug === S.slug; });
+    var sp = (S.sport === "all" || S.sport === "other") ? "all" : S.sport;
+    var kpis = (idxEntry && idxEntry.kpis && idxEntry.kpis[sp]) ? idxEntry.kpis[sp] : (S.meta.meta.headline || {});
+    var dev = kpis.dev, hold = kpis.holdout;
+    $("kpisBox").innerHTML =
+      kpi("Development" + (S.meta.meta.periods && S.meta.meta.periods.dev ? " · " + esc(S.meta.meta.periods.dev) : ""), dev, sp === "all") +
+      kpi("Holdout" + (S.meta.meta.periods && S.meta.meta.periods.holdout ? " · " + esc(S.meta.meta.periods.holdout) : "") + " (Exploratory)", hold, sp === "all") +
+      '<div class="kpi"><div class="k">Trades</div><div class="v" id="kTrades">–</div><div class="ci" id="kTradesSub">' +
+      (S.meta.meta.page_sampled || S.meta.meta.truncated ? "ledger sampled for size" : "every trade") + "</div></div>" +
+      '<div class="kpi"><div class="k">P&L shown</div><div class="v" id="kPnl">–</div><div class="ci" id="kRoi">on the filtered trades</div></div>';
   }
 
   function renderStrategy() {
-    var m = S.meta.meta, h = m.headline || {}, dev = h.dev, hold = h.holdout;
+    var m = S.meta.meta;
     var sportOpts = ['<option value="all">All</option>'].concat(S.meta.sports.map(function (s) {
       return '<option value="' + esc(s) + '"' + (s === S.sport ? " selected" : "") + ">" + esc(s) + "</option>"; })).join("");
     $("main").innerHTML =
@@ -96,13 +117,7 @@
       '<dl class="rules"><div><dt>Entry</dt><dd>' + esc(m.entry_rule) + "</dd></div>" +
       "<div><dt>Exit</dt><dd>" + esc(m.exit_rule) + "</dd></div>" +
       "<div><dt>Costs</dt><dd>" + esc(m.cost_model) + "</dd></div></dl>" +
-      '<div class="kpis">' +
-      kpi("Development" + (m.periods && m.periods.dev ? " · " + esc(m.periods.dev) : ""), dev) +
-      kpi("Holdout" + (m.periods && m.periods.holdout ? " · " + esc(m.periods.holdout) : ""), hold) +
-      '<div class="kpi"><div class="k">Trades</div><div class="v" id="kTrades">–</div><div class="ci" id="kTradesSub">' +
-      (m.page_sampled || m.truncated ? "ledger sampled for size" : "every trade") + "</div></div>" +
-      '<div class="kpi"><div class="k">P&L shown</div><div class="v" id="kPnl">–</div><div class="ci" id="kRoi">on the filtered trades</div></div>' +
-      "</div>" +
+      '<div class="kpis" id="kpisBox"></div>' +
       '<div class="chartbox"><div class="chart-head"><span class="eyebrow">Equity curve</span>' +
       '<span class="eyebrow" id="chartNote"></span></div><canvas id="eq"></canvas></div>' +
       '<div class="controls">' +
@@ -123,8 +138,9 @@
       (m.caveats && m.caveats.length ? '<h3 style="margin-top:12px">Caveats</h3><ul>' + m.caveats.map(function (c) { return "<li>" + esc(c) + "</li>"; }).join("") + "</ul>" : "") +
       '<p class="paths">' + esc(m.report_path || "") + (m.code_path ? " · " + esc(m.code_path) : "") + "</p></div></section>";
 
+    updateKPIs();
     $("fp").onchange = function () { S.period = this.value; S.offset = 0; loadTrades(); };
-    $("fs").onchange = function () { S.sport = this.value; S.offset = 0; loadTrades(); };
+    $("fs").onchange = function () { S.sport = this.value; S.offset = 0; updateKPIs(); loadTrades(); };
     $("fr").onchange = function () { S.result = this.value; S.offset = 0; loadTrades(); };
     var t; $("fq").oninput = function () { var v = this.value; clearTimeout(t); t = setTimeout(function () { S.tq = v; S.offset = 0; loadTrades(); }, 250); };
     $("prev").onclick = function () { S.offset = Math.max(0, S.offset - S.limit); S.open = null; loadTrades(); };
@@ -138,10 +154,12 @@
   }
 
   function th(label, sort, right) { return '<th class="' + (right ? "r" : "") + '" data-sort="' + sort + '" title="sort">' + label + "</th>"; }
-  function kpi(label, h) {
+  function kpi(label, h, isGlobal) {
     if (!h) return '<div class="kpi"><div class="k">' + label + '</div><div class="v">–</div><div class="ci">no bets in this window</div></div>';
+    var extra = "";
+    if (isGlobal && h.ci_lo != null) extra = " · CI " + pct(h.ci_lo) + " to " + pct(h.ci_hi);
     return '<div class="kpi"><div class="k">' + label + '</div><div class="v ' + sgn(h.roi) + '">' + pct(h.roi) + "</div>" +
-      '<div class="ci">' + (h.bets || 0).toLocaleString() + " bets · CI " + pct(h.ci_lo) + " to " + pct(h.ci_hi) + "</div></div>";
+      '<div class="ci">' + (h.bets || 0).toLocaleString() + " bets" + extra + "</div></div>";
   }
 
   function renderTable() {

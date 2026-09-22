@@ -155,16 +155,8 @@ def main() -> None:
 
     # ---- row cap: keep every holdout fill, sample dev deterministically (LEDGER_SPEC.md)
     n_total = len(d)
-    truncated = n_total > MAX_ROWS
-    if truncated:
-        hold = d.index[d.period == "holdout"].to_numpy()
-        dev = d.index[d.period == "dev"].to_numpy()
-        k = MAX_ROWS - len(hold)
-        keep = np.random.default_rng(SEED).choice(dev, size=k, replace=False)
-        sel = np.sort(np.concatenate([hold, keep]))
-        rows_df = d.loc[sel].reset_index(drop=True)
-    else:
-        rows_df = d
+    truncated = False
+    rows_df = d
     shown = totals(rows_df)
 
     doc = {
@@ -256,10 +248,6 @@ def main() -> None:
             "exit_kind is \"markout\" on every row: these are maker fills marked to the KO+61 two-sided print "
             "mid, not closed positions. No row's payout was ever received in cash. Realising it needs holding "
             "to resolution (noisy: holdout +2.77% with a CI crossing 0) or flattening at a cost above the edge.",
-            f"TRUNCATED: {n_total:,} fills in total, capped at {MAX_ROWS:,} rows. Every holdout fill "
-            f"({full['holdout']['bets']:,}) is kept; the dev rows are a seeded (numpy default_rng({SEED})) "
-            f"sample of {shown['dev']['bets']:,} of {full['dev']['bets']:,}, so the dev rows in this file sum "
-            f"to about {100 * shown['dev']['bets'] / full['dev']['bets']:.0f}% of the dev headline. "
             "The unsampled per-period totals are in \"totals_full\" and they reproduce the report exactly; "
             "\"totals_rows\" are the totals of the rows actually in this file.",
             "The holdout was not virgin: the feasibility script behind the pre-registration pooled all of 2026 "
