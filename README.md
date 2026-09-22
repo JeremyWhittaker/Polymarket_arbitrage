@@ -56,6 +56,28 @@ Trap: selecting games on *total* volume (>= $50k, which includes in-play trading
 underdogs look +3% to +9% profitable. Upsets draw more in-play volume, so thin markets clear
 the cut more often when the dog wins. Selecting on pregame volume only removes the effect.
 
+## The breaking point: price vs reality — [`reports/CALIBRATION.md`](reports/CALIBRATION.md)
+
+35.8M fills in 17,810 markets (selected on pregame volume only), asking at every price level how
+often that side actually won.
+
+| Price paid | Actually won | Edge | Return per $1 after fees |
+|---|---|---|---|
+| 90-92.5c | 88.6% | -2.9 pts | -3.3% |
+| 92.5-95c | 93.3% | -0.7 pts | -0.8% |
+| 95-96c | 95.1% | -0.7 pts | -0.8% |
+| 96-97c | 96.7% | +0.1 pts | +0.0% |
+| 97-98c | 97.1% | -0.3 pts | -0.4% |
+| 98-99c | 98.5% | +0.1 pts | +0.0% |
+| 99c+ | 99.1% | +0.0 pts | +0.0% |
+
+There is no breaking point: above ~96c the market is calibrated to within a tenth of a point, and
+the only reliable deviations are *negative*. Tradable version (buy the first executable print at or
+above a threshold, hold to resolution, actual fees): every threshold from 60c to 99c loses, dev and
+holdout alike (e.g. >= 95c: -1.0% dev / -0.8% holdout on 17.6k bets; >= 99c: -0.5% / -0.3%). The
+mirror (buying longshots) is worse: -4% to -11%. Ledgers for >= 90 / 95 / 99c and the <= 10c mirror
+are browsable in the research desk.
+
 ## Threshold strategies — [`reports/THRESHOLDS.md`](reports/THRESHOLDS.md)
 
 - **Bet any team priced >= T pregame (T = 50c..90c), per sport:** no threshold is profitable
@@ -110,6 +132,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pmsports wallets-report # copy-the-sharps study -> reports/WALLETS.md (~40 min, 14 GB cap)
 .venv/bin/python -m pmsports favorites      # bet every pregame favorite, all sports -> reports/FAVORITES.md (~2 min)
 .venv/bin/python -m pmsports thresholds     # price thresholds by sport + MLB inning-discount rule -> reports/THRESHOLDS.md
+.venv/bin/python -m pmsports calibration    # price vs realized win rate by sport -> reports/CALIBRATION.md (~2 min)
+.venv/bin/python -m pmsports.webapp         # research desk on :8808 (systemd user service pmsports-web)
 .venv/bin/python -m pytest -q tests
 ```
 
@@ -160,6 +184,7 @@ pmsports/
     live.py        per-scoring-play latency from a recorded day
     favorites.py   pregame-favorite (and underdog) hold-to-resolution backtest, all sports
     thresholds.py  price-threshold grid by sport; MLB leader-below-historical-rate rule
+    calibration.py price vs realized win rate by sport, and the tradable threshold rules
   wallets/
     universe.py    all resolved sports game markets (Gamma tag 100639), sport family, payouts
     tapes.py       per-market taker tapes; streaming loader (54M fills in ~2 GB)

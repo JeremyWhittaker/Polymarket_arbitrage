@@ -13,6 +13,7 @@
   wallets-report  copy-the-sharps study -> reports/WALLETS.md
   favorites    bet every pregame favorite, hold to the end (all sports) -> reports/FAVORITES.md
   thresholds   pregame price thresholds by sport + MLB "leader below historical win rate" rule
+  calibration  price vs realized win rate by sport ("the breaking point") -> reports/CALIBRATION.md
 """
 from __future__ import annotations
 
@@ -50,6 +51,7 @@ def main() -> None:
     sub.add_parser("wallets-report")
     sub.add_parser("favorites")
     sub.add_parser("thresholds")
+    sub.add_parser("calibration")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -100,6 +102,9 @@ def main() -> None:
         run()
     elif a.cmd == "thresholds":
         from .analysis.thresholds import run
+        run()
+    elif a.cmd == "calibration":
+        from .analysis.calibration import run
         run()
 
 
