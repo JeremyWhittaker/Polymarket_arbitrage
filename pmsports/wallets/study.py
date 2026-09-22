@@ -30,6 +30,28 @@ DELAYS = (0, 5, 30, 60)
 MAX_COPY_ROWS = 150_000
 
 
+def _causal_cutoff(t: pd.DataFrame, max_ts: float, meta: pd.DataFrame) -> pd.Series:
+    """Filter to fills that occurred before max_ts AND whose market resolution is known before max_ts.
+    Uses closed_ts as a conservative proxy for when the market outcome is publicly known.
+    """
+    if meta is None:
+        raise ValueError("metadata is required for causal cutoffs (prevents outcome leakage)")
+
+    if isinstance(t.condition_id.dtype, pd.CategoricalDtype):
+        c_codes = t.condition_id.cat.codes.to_numpy()
+        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
+        t_closed_ts = np.full(len(t), np.nan, dtype=np.float64)
+        valid = c_codes >= 0
+        if len(closed_ts_lut) > 0:
+            # Mask indices that are out of bounds as an extra safety measure
+            safe_codes = np.clip(c_codes[valid], 0, len(closed_ts_lut) - 1)
+            t_closed_ts[valid] = closed_ts_lut[safe_codes]
+    else:
+        t_closed_ts = t.condition_id.map(meta["closed_ts"]).to_numpy(dtype=np.float64)
+
+    return (t.timestamp < max_ts) & (t_closed_ts < max_ts) & ~np.isnan(t_closed_ts)
+
+
 def selections(s1: pd.DataFrame, lb: pd.DataFrame | None) -> dict[str, list[str]]:
     act = s1[s1.markets >= MIN_MKTS]
     sel = {
@@ -91,13 +113,7 @@ def placebo(t2, s1, s2, n_draws=200, seed=3) -> pd.DataFrame:
 
 def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str = "all", meta: pd.DataFrame | None = None) -> dict:
     ts = pd.Timestamp(split, tz="UTC").timestamp()
-    if meta is not None:
-        c_codes = t.condition_id.cat.codes.to_numpy()
-        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
-        t_closed_ts = closed_ts_lut[c_codes]
-        t1 = t[(t.timestamp < ts) & (t_closed_ts < ts) & ~np.isnan(t_closed_ts)]
-    else:
-        t1 = t[t.timestamp < ts]
+    t1 = t[_causal_cutoff(t, ts, meta)]
     t2 = t[t.timestamp >= ts]
     pos1, pos2 = skill.positions(t1), skill.positions(t2)
     s1, s2 = skill.wallet_stats(pos1), skill.wallet_stats(pos2)
@@ -178,28 +194,18 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
     months = pd.date_range(start, end, freq="MS", tz="UTC")
     rng = np.random.default_rng(17)
     out = []
-    
-    if meta is not None:
-        c_codes = t.condition_id.cat.codes.to_numpy()
-        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
-        t_closed_ts = closed_ts_lut[c_codes]
-    else:
-        t_closed_ts = None
 
     for m0, m1 in zip(months[:-1], months[1:]):
         a, b = m0.timestamp(), m1.timestamp()
-        
-        if t_closed_ts is not None:
-            mask = (t.timestamp >= a - lookback_days * 86400) & (t.timestamp < a) & (t_closed_ts < a) & ~np.isnan(t_closed_ts)
-        else:
-            mask = (t.timestamp >= a - lookback_days * 86400) & (t.timestamp < a)
-            
+
+        mask = _causal_cutoff(t, a, meta) & (t.timestamp >= a - lookback_days * 86400)
+
         hist_t = t[mask]
         nxt = t[(t.timestamp >= a) & (t.timestamp < b)]
-        
+
         if hist_t.empty or nxt.empty:
             continue
-            
+
         pos = skill.positions(hist_t)[["proxyWallet", "cost", "pnl", "var"]]
         s = pos.groupby("proxyWallet", observed=True).agg(markets=("cost", "size"), staked=("cost", "sum"),
                                                            pnl=("pnl", "sum"), var=("var", "sum"))
@@ -232,13 +238,7 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
 def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30), meta: pd.DataFrame | None = None) -> pd.DataFrame:
     """The P1 FDR-significant wallets, copied in P2: timing (delay) x sizing (equal vs their $) x phase."""
     ts = pd.Timestamp(split, tz="UTC").timestamp()
-    if meta is not None:
-        c_codes = t.condition_id.cat.codes.to_numpy()
-        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
-        t_closed_ts = closed_ts_lut[c_codes]
-        t1 = t[(t.timestamp < ts) & (t_closed_ts < ts) & ~np.isnan(t_closed_ts)]
-    else:
-        t1 = t[t.timestamp < ts]
+    t1 = t[_causal_cutoff(t, ts, meta)]
     s1 = skill.wallet_stats(skill.positions(t1))
     fdr = skill.fdr_survivors(s1[s1.markets >= MIN_MKTS].z).tolist()
     t2 = t[t.timestamp >= ts]

@@ -136,10 +136,14 @@ async def _mlb(games_ref: dict, sink: _Sink, stop: float, every_s: float = 2.0) 
 
 
 async def _refresh(games_ref: dict, window_h: float, stop: float, meta: _Sink) -> None:
+    last_day = None
     while time.time() < stop:
         try:
-            games = await asyncio.to_thread(_slate, window_h)
             today = datetime.now(timezone.utc).date()
+            day_str = today.strftime("%Y-%m-%d")
+            rollover = (day_str != last_day)
+
+            games = await asyncio.to_thread(_slate, window_h)
             sched = await asyncio.to_thread(get_json, f"{MLB_API}/schedule",
                                             {"sportId": 1, "startDate": (today - pd.Timedelta(days=1)).isoformat(),
                                              "endDate": today.isoformat()})
@@ -149,8 +153,10 @@ async def _refresh(games_ref: dict, window_h: float, stop: float, meta: _Sink) -
             games_ref["tokens"] |= new
             games_ref["game_pks"] = live_pks
             for g in games:
-                if g["home_token"] in new:
+                if rollover or g["home_token"] in new:
                     meta.write({"game": g})
+            if rollover:
+                last_day = day_str
             log.info("slate: %d markets subscribed, %d MLB games live", len(games_ref["tokens"]) // 2, len(live_pks))
         except Exception as exc:
             log.warning("slate refresh: %s", exc)

@@ -33,14 +33,14 @@ def load_metadata(day: str) -> pd.DataFrame:
     '''Load games metadata for a day, looking at previous days to recover cross-day captures.'''
     dt = pd.to_datetime(day)
     games = []
-    for i in range(3):
+    for i in reversed(range(3)):
         d_str = (dt - pd.Timedelta(days=i)).strftime("%Y-%m-%d")
         p = DATA_DIR / "live" / d_str / "games.jsonl"
         if p.exists():
             for r in _jsonl(p):
                 if "game" in r:
                     games.append(r["game"])
-    return pd.DataFrame(games).drop_duplicates("condition_id") if games else pd.DataFrame()
+    return pd.DataFrame(games).drop_duplicates("condition_id", keep="last") if games else pd.DataFrame()
 
 def live_latency(day: str, min_move: float = 0.03) -> pd.DataFrame:
     d = DATA_DIR / "live" / day

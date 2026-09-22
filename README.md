@@ -1,5 +1,9 @@
 # Polymarket sports research
 
+> Repairs are in progress following the [independent review](reports/PEER_REVIEW.md).
+> Historical returns below predate the current causality and execution corrections.
+> See the [repair checklist](reports/REPAIR_CHECKLIST.md) and [validation evidence](reports/REPAIR_VALIDATION.md); no corrected trading edge has yet been accepted.
+
 Tests whether you can make money on Polymarket sports moneylines by:
 
 1. **Timing**: betting right after something happens in the game (e.g. a home run),
