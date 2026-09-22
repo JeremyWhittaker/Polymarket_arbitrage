@@ -200,7 +200,7 @@ def test_ui_delayed_filters_do_not_overwrite_table_or_chart(isolated_ledgers):
                     await asyncio.sleep(.01)
                 assert len(held) == 2
                 await page.select_option("#fs", "baseball")
-                await page.wait_for_function("document.querySelector('#kTrades').textContent === '2' && document.querySelector('#chartNote').textContent.includes('2 trades')")
+                await page.wait_for_function("document.querySelector('#kTrades').textContent === '2' && document.querySelector('#chartNote').textContent.includes('2 rows')")
                 await page.evaluate("window.dispatchEvent(new Event('resize'))")
                 release.set()
                 for _ in range(200):
@@ -211,7 +211,7 @@ def test_ui_delayed_filters_do_not_overwrite_table_or_chart(isolated_ledgers):
                 await page.wait_for_timeout(100)
                 assert await page.locator("#tb tr.t").count() == 2
                 assert await page.locator("#tb tr[data-id='3']").count() == 0
-                assert "2 trades" in await page.locator("#chartNote").text_content()
+                assert "2 rows" in await page.locator("#chartNote").text_content()
                 await page.click(".tab[data-k='other']")
                 await page.wait_for_selector("#tb tr[data-id='4']")
                 assert await page.locator("#fs").input_value() == "other"
@@ -238,3 +238,12 @@ def test_ui_delayed_filters_do_not_overwrite_table_or_chart(isolated_ledgers):
         thread.join(timeout=5)
         sock.close()
         assert not thread.is_alive()
+
+
+def test_no_fill_audits_do_not_count_as_bets_and_arbitrary_periods_work():
+    import pandas as pd
+    frame = pd.DataFrame(dict(period=['historical_capture']*3, stake_usd=[10.,0.,0.],
+        fee_usd=[.25,0.,0.], pnl_usd=[-1.,0.,0.]))
+    result = server._calc_kpis(frame)
+    assert result['historical_capture']['bets'] == 1
+    assert result['historical_capture']['roi'] == -1/10.25

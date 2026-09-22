@@ -18,6 +18,13 @@ after the retrospective contact clock, versus 41.10 seconds for the MLB feed and
 seconds for the Polymarket sports feed. This selected sample weighs against reacting to
 these free feeds before the market moves; it does not measure a trading return or all events.
 
+The separate [received-book replay](reports/research/LIVE_EXECUTION.md) covers all observed
+score increases and a literal mean-reversion exit rule on that capture. The fixed mean rule
+lost $87.79 across 12 positions (−7.27% including entry and exit fees). Three-second score
+reaction returned −4.57% using MLB receipts and −7.47% using Polymarket receipts. These
+are hypothetical depth crossings on one already inspected day, with order acceptance and
+historical minimum-size constraints unobserved; they do not establish future returns.
+
 ## Data and execution rules
 
 - New collection defaults to **no eventual-volume floor**. `--min-volume` is an explicitly

@@ -48,12 +48,13 @@
       return '<section class="rail-group"><h3>' + esc(g || "Other") + "</h3>" + groups[g].map(function (d) {
         var sp = S.tab;
         var h = (d.kpis && d.kpis[sp]) || {};
-        var best = h.holdout || h.dev || {};
+        var periodKey = h.holdout ? "holdout" : (h.dev ? "dev" : Object.keys(h)[0]);
+        var best = h[periodKey] || {};
         var n = S.tab === "all" ? d.n_total_trades : ((d.sport_counts || {})[S.tab] || 0);
         return '<button class="item" data-slug="' + esc(d.slug) + '" aria-pressed="' + (d.slug === S.slug) + '">' +
           "<span>" + esc(d.title) + '</span><span class="chip ' + vclass(d.verdict) + '">' + esc(d.verdict) + "</span>" +
-          '<span class="sub">' + (n || 0).toLocaleString() + " trades · " +
-          (best.roi == null ? "–" : '<span class="' + sgn(best.roi) + '">' + pct(best.roi) + "</span> " + (h.holdout ? "holdout" : "dev")) +
+          '<span class="sub">' + (n || 0).toLocaleString() + " rows · " +
+          (best.roi == null ? "–" : '<span class="' + sgn(best.roi) + '">' + pct(best.roi) + "</span> " + esc(periodKey || "")) +
           "</span></button>";
       }).join("") + "</section>";
     }).join("") || '<p class="muted" style="padding:6px 2px">Nothing here yet.</p>';
@@ -111,11 +112,13 @@
     var sp = S.sport;
     var kpis = S.page ? S.page.kpis : {};
     var dev = kpis.dev, hold = kpis.holdout;
+    var other = Object.keys(kpis).filter(function (p) { return p !== "dev" && p !== "holdout"; });
     $("kpisBox").innerHTML =
+      (other.length ? other.map(function (p) { return kpi(esc(p.replace(/_/g, " ")) + " (Exploratory)", kpis[p], false); }).join("") :
       kpi("Development" + (S.meta.meta.periods && S.meta.meta.periods.dev ? " · " + esc(S.meta.meta.periods.dev) : ""), dev, sp === "all") +
-      kpi("Holdout" + (S.meta.meta.periods && S.meta.meta.periods.holdout ? " · " + esc(S.meta.meta.periods.holdout) : "") + " (Exploratory)", hold, sp === "all") +
-      '<div class="kpi"><div class="k">Trades</div><div class="v" id="kTrades">–</div><div class="ci" id="kTradesSub">' +
-      (S.meta.meta.page_sampled || S.meta.meta.truncated ? "ledger sampled for size" : "every trade") + "</div></div>" +
+      kpi("Holdout" + (S.meta.meta.periods && S.meta.meta.periods.holdout ? " · " + esc(S.meta.meta.periods.holdout) : "") + " (Exploratory)", hold, sp === "all")) +
+      '<div class="kpi"><div class="k">Audit rows</div><div class="v" id="kTrades">–</div><div class="ci" id="kTradesSub">' +
+      (S.meta.meta.page_sampled || S.meta.meta.truncated ? "ledger sampled for size" : "every signal and fill") + "</div></div>" +
       '<div class="kpi"><div class="k">P&L shown</div><div class="v" id="kPnl">–</div><div class="ci" id="kRoi">on the filtered trades</div></div>';
   }
 
@@ -183,15 +186,17 @@
   function renderTable() {
     var p = S.page, c = {}; p.columns.forEach(function (n, i) { c[n] = i; });
     $("kTrades").textContent = p.total.toLocaleString();
+    $("kTradesSub").textContent = (p.fills || 0).toLocaleString() + " filled positions; remaining rows are signals or observations";
     $("kPnl").textContent = usd(p.pnl); $("kPnl").className = "v " + sgn(p.pnl);
     $("kRoi").textContent = (p.roi == null ? "" : pct(p.roi) + " per $ deployed · ") + p.wins.toLocaleString() + " winners";
-    $("pinfo").textContent = p.total ? (p.offset + 1).toLocaleString() + "–" + Math.min(p.offset + p.limit, p.total).toLocaleString() + " of " + p.total.toLocaleString() + " trades" : "no trades match";
+    $("pinfo").textContent = p.total ? (p.offset + 1).toLocaleString() + "–" + Math.min(p.offset + p.limit, p.total).toLocaleString() + " of " + p.total.toLocaleString() + " rows" : "no trades match";
     $("prev").disabled = p.offset <= 0; $("next").disabled = p.offset + p.limit >= p.total;
     $("tb").innerHTML = p.rows.map(function (r) {
       var open = S.open === r[c.id];
       var exitTxt = r[c.exit_kind] === "resolution"
         ? (r[c.exit_price] === 1 ? "won" : r[c.exit_price] === 0 ? "lost" : "void " + cents(r[c.exit_price]))
         : esc(r[c.exit_kind]) + " " + cents(r[c.exit_price]);
+      if (!(Number(r[c.stake_usd]) + Number(r[c.fee_usd]) > 0)) exitTxt = esc(r[c.status] || "no position");
       var row = '<tr class="t" data-id="' + r[c.id] + '" aria-expanded="' + open + '">' +
         '<td class="num">' + r[c.id] + "</td><td class=\"num\">" + esc(r[c.date]) + "</td>" +
         '<td class="wrap">' + esc(r[c.event]) + '</td><td class="wrap">' + esc(r[c.side]) + "</td>" +
@@ -226,7 +231,7 @@
     cv.width = W * dpr; cv.height = H * dpr;
     var g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
     var pts = d.points || [];
-    $("chartNote").textContent = pts.length ? "cumulative P&L · " + (d.n || 0).toLocaleString() + " trades" : "";
+    $("chartNote").textContent = pts.length ? "cumulative P&L · " + (d.n || 0).toLocaleString() + " rows" : "";
     if (!pts.length) return;
     var ys = pts.map(function (p) { return p[1]; });
     var lo = Math.min(0, Math.min.apply(null, ys)), hi = Math.max(0, Math.max.apply(null, ys));
@@ -258,7 +263,7 @@
     S.index.forEach(function (x) { trades += x.n_total_trades || 0; if ((x.verdict || "").toLowerCase() === "dead") dead++; if (vclass(x.verdict) === "profitable") prof++; });
     document.getElementById("facts").innerHTML =
       '<div><b class="num">' + S.index.length + "</b>strategies</div>" +
-      '<div><b class="num">' + trades.toLocaleString() + "</b>trades</div>" +
+      '<div><b class="num">' + trades.toLocaleString() + "</b>audit rows</div>" +
       '<div><b class="num">' + dead + "/" + S.index.length + "</b>dead after costs</div>" +
       '<div><b class="num">' + prof + "</b>profitable</div>";
     renderTabs(); renderRail();

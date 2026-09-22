@@ -39,7 +39,7 @@ def robots():
 _cache: dict[str, dict] = {}
 _lock = threading.Lock()
 _index_lock = threading.Lock()
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 SPORT_LABEL = {"baseball": "Baseball", "soccer": "Soccer", "american_football": "Football",
                "basketball": "Basketball", "tennis": "Tennis", "esports": "Esports",
@@ -105,12 +105,13 @@ def _load(slug: str) -> dict:
 
 def _calc_kpis(df: pd.DataFrame) -> dict:
     res = {}
-    for p in ["dev", "holdout"]:
+    for p in sorted(df.period.dropna().unique()) if "period" in df else ["all"]:
         pdf = df[df.period == p] if "period" in df else df
         if pdf.empty: continue
         dep = (pdf.get("stake_usd", pd.Series(0, index=pdf.index)).fillna(0) + pdf.get("fee_usd", pd.Series(0, index=pdf.index)).fillna(0)).sum()
         pnl = pdf.get("pnl_usd", pd.Series(0, index=pdf.index)).sum()
-        res[p] = {"roi": float(pnl / dep) if dep else None, "bets": len(pdf)}
+        filled = (pdf.get("stake_usd", pd.Series(0, index=pdf.index)).fillna(0) + pdf.get("fee_usd", pd.Series(0, index=pdf.index)).fillna(0)) > 0
+        res[p] = {"roi": float(pnl / dep) if dep else None, "bets": int(filled.sum())}
     return res
 
 def build_index(force: bool = False) -> list[dict]:
@@ -225,6 +226,7 @@ def api_trades(slug: str, offset: int = Query(0, ge=0), limit: int = Query(100, 
     page = df.iloc[offset: offset + limit]
     return JSONResponse({
         "total": int(len(df)), "offset": offset, "limit": limit,
+        "fills": int((df.stake_usd.fillna(0) + df.fee_usd.fillna(0)).gt(0).sum()),
         "pnl": float(df.pnl_usd.sum()), "roi": float(df.pnl_usd.sum() / dep) if dep else None,
         "wins": int((df.pnl_usd > 0).sum()), "kpis": _calc_kpis(df), "columns": list(page.columns),
         "rows": json.loads(page.to_json(orient="values")),
@@ -235,7 +237,9 @@ def api_trades(slug: str, offset: int = Query(0, ge=0), limit: int = Query(100, 
 def api_equity(slug: str, period: str = "all", sport: str = "all", result: str = "all", q: str = "",
                points: int = Query(600, ge=2, le=2000)):
     e = _load(slug)
-    df = _filter(e["df"], period, sport, result, q).sort_values("entry_ts", kind="stable")
+    df = _filter(e["df"], period, sport, result, q)
+    clock = df.entry_ts.fillna(df.get("signal_ts", pd.Series(index=df.index, dtype=float)))
+    df = df.assign(_clock=clock).sort_values("_clock", kind="stable")
     if df.empty:
         return {"n": 0, "points": [], "holdout_at": None, "dates": []}
     cum = df.pnl_usd.fillna(0).cumsum().to_numpy()

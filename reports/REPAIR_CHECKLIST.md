@@ -20,7 +20,7 @@ User instruction: resume Claude's work, fix the peer-review findings, and establ
 | Backfill measured research coverage | deferred | Finite creation metadata/tape upgrades and source-coverage audit before final strategy conclusions. |
 | Rebuild MLB corpus and rerun corrected wallet statistics | deferred | Code checkpoint accepted; full jobs follow execution/coverage changes to avoid presenting stale results. |
 | Corrected whale and esports lead evaluation | deferred | Causal, size-limited sensitivity with game-clustered uncertainty. |
-| Literal trade-to-mean exit and actual received-book replay | deferred | Original prompt requires an exit at the mean, not settlement-only bets. Bounded Sep19 book/receipt experiment with prior-season state model, bid-depth exits, timeout, fees and residual settlement; live-book-task.md defines fixed protocol before implementation. |
+| Literal trade-to-mean exit and actual received-book replay | implemented | LIVE_EXECUTION.md:4,037,480 received messages,15 verified resolved contracts;12 mean positions lose$87.79. Fixed prior-season model, delayed bid-depth exits/timeout, fees, partials and capture censoring. Seven engine/strategy tests and independent cash/source review; one-day hypothetical crossing, not validated exchange fills. |
 | Desktop/mobile QA and deployed desk | implemented | Actual25ledger desktop1440/mobile390 visual QA passed; accepted8d9143e pushed, user service restarted and localhost/Tailscale target checked. |
 | Final viability decision and reproducible results | deferred | Fresh results report distinguishing negative, inconclusive and genuinely validated evidence. |
 
