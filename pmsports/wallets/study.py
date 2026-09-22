@@ -89,9 +89,16 @@ def placebo(t2, s1, s2, n_draws=200, seed=3) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str = "all") -> dict:
+def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str = "all", meta: pd.DataFrame | None = None) -> dict:
     ts = pd.Timestamp(split, tz="UTC").timestamp()
-    t1, t2 = t[t.timestamp < ts], t[t.timestamp >= ts]
+    if meta is not None:
+        c_codes = t.condition_id.cat.codes.to_numpy()
+        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
+        t_closed_ts = closed_ts_lut[c_codes]
+        t1 = t[(t.timestamp < ts) & (t_closed_ts < ts) & ~np.isnan(t_closed_ts)]
+    else:
+        t1 = t[t.timestamp < ts]
+    t2 = t[t.timestamp >= ts]
     pos1, pos2 = skill.positions(t1), skill.positions(t2)
     s1, s2 = skill.wallet_stats(pos1), skill.wallet_stats(pos2)
     log.info("[%s] P1 %d wallets / %d fills, P2 %d wallets / %d fills", label, len(s1), len(t1), len(s2), len(t2))
@@ -161,23 +168,40 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
 
 
 def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180,
-                 rules=("z", "whales", "random"), delays=(0, 30), max_rows: int = 40_000) -> pd.DataFrame:
+                 rules=("z", "whales", "random"), delays=(0, 30), max_rows: int = 40_000,
+                 meta: pd.DataFrame | None = None) -> pd.DataFrame:
     """Each month: pick top-K wallets on the trailing window, copy their next-month trades.
 
-    Positions are computed once (keyed by first-fill time); each month's selection is a
-    vectorized sum over the trailing window, and one copy-price pass serves every rule.
+    Positions are computed dynamically for the trailing window to avoid leaking
+    fills or market outcomes that occur after the selection boundary.
     """
-    pos = skill.positions(t)[["proxyWallet", "condition_id", "ts", "cost", "pnl", "var"]]
     months = pd.date_range(start, end, freq="MS", tz="UTC")
     rng = np.random.default_rng(17)
     out = []
+    
+    if meta is not None:
+        c_codes = t.condition_id.cat.codes.to_numpy()
+        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
+        t_closed_ts = closed_ts_lut[c_codes]
+    else:
+        t_closed_ts = None
+
     for m0, m1 in zip(months[:-1], months[1:]):
         a, b = m0.timestamp(), m1.timestamp()
-        hist = pos[(pos.ts >= a - lookback_days * 86400) & (pos.ts < a)]
+        
+        if t_closed_ts is not None:
+            mask = (t.timestamp >= a - lookback_days * 86400) & (t.timestamp < a) & (t_closed_ts < a) & ~np.isnan(t_closed_ts)
+        else:
+            mask = (t.timestamp >= a - lookback_days * 86400) & (t.timestamp < a)
+            
+        hist_t = t[mask]
         nxt = t[(t.timestamp >= a) & (t.timestamp < b)]
-        if hist.empty or nxt.empty:
+        
+        if hist_t.empty or nxt.empty:
             continue
-        s = hist.groupby("proxyWallet", observed=True).agg(markets=("cost", "size"), staked=("cost", "sum"),
+            
+        pos = skill.positions(hist_t)[["proxyWallet", "cost", "pnl", "var"]]
+        s = pos.groupby("proxyWallet", observed=True).agg(markets=("cost", "size"), staked=("cost", "sum"),
                                                            pnl=("pnl", "sum"), var=("var", "sum"))
         s["z"] = s.pnl / np.sqrt(s["var"].clip(lower=1e-9))
         act = s[s.markets >= MIN_MKTS]
@@ -205,10 +229,17 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
     return pd.DataFrame(out)
 
 
-def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30)) -> pd.DataFrame:
+def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30), meta: pd.DataFrame | None = None) -> pd.DataFrame:
     """The P1 FDR-significant wallets, copied in P2: timing (delay) x sizing (equal vs their $) x phase."""
     ts = pd.Timestamp(split, tz="UTC").timestamp()
-    s1 = skill.wallet_stats(skill.positions(t[t.timestamp < ts]))
+    if meta is not None:
+        c_codes = t.condition_id.cat.codes.to_numpy()
+        closed_ts_lut = meta["closed_ts"].reindex(t.condition_id.cat.categories).to_numpy(dtype=np.float64)
+        t_closed_ts = closed_ts_lut[c_codes]
+        t1 = t[(t.timestamp < ts) & (t_closed_ts < ts) & ~np.isnan(t_closed_ts)]
+    else:
+        t1 = t[t.timestamp < ts]
+    s1 = skill.wallet_stats(skill.positions(t1))
     fdr = skill.fdr_survivors(s1[s1.markets >= MIN_MKTS].z).tolist()
     t2 = t[t.timestamp >= ts]
     rows = t2[t2.proxyWallet.isin(fdr)]

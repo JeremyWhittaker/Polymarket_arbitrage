@@ -7,6 +7,9 @@ Runs every copy-trading angle per sport family and overall:
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,11 +30,33 @@ SPLIT = "2026-01-01"
 def _md(df, fmt=".3f"):
     return df.to_markdown(index=False, floatfmt=fmt) if len(df) else "_no data_"
 
+def make_manifest(split, walk_start, walk_end):
+    manifest = {
+        "split": split,
+        "walk_start": walk_start,
+        "walk_end": walk_end,
+        "code_hash": get_code_hash(),
+        "inputs": {}
+    }
+    for f in [OUT / "universe.parquet", OUT / "leaderboard.parquet", OUT / "leaderboard_onchain_2025.parquet"]:
+        if f.exists():
+            st = f.stat()
+            manifest["inputs"][f.name] = {"mtime": st.st_mtime, "size": st.st_size}
+    return manifest
+
+def get_code_hash():
+    h = hashlib.sha256()
+    parent = Path(__file__).parent
+    for p in [parent / "study.py", parent / "skill.py", parent / "report.py"]:
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()
 
 def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None = None) -> None:
     REPORTS.mkdir(exist_ok=True)
     walk_end = walk_end or pd.Timestamp.now(tz="UTC").strftime("%Y-%m-01")
     u = pd.read_parquet(OUT / "universe.parquet")
+    meta = u.drop_duplicates("condition_id").set_index("condition_id")
     lb = pd.read_parquet(OUT / "leaderboard.parquet")
     t = load_trades(u)
     log.info("loaded %d fills, %d wallets, %d markets", len(t), t.proxyWallet.nunique(), t.condition_id.nunique())
@@ -39,23 +64,29 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     cache = OUT / "report_cache"
     cache.mkdir(exist_ok=True)
 
+    manifest = make_manifest(split, walk_start, walk_end)
+    manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    run_id = manifest_hash[:12]
+
     def cached(name, fn):
-        f = cache / f"{name}.pkl"
+        f = cache / f"{name}_{run_id}.pkl"
         if f.exists():
             return pd.read_pickle(f)
         obj = fn()
-        pd.to_pickle(obj, f)
+        tmp = cache / f"{name}_{run_id}.pkl.tmp"
+        pd.to_pickle(obj, tmp)
+        tmp.rename(f)
         return obj
 
-    fams, rules, decs = cached("families", lambda: _families(t, lb, split))
+    fams, rules, decs = cached("families", lambda: _families(t, lb, split, meta))
     t2 = t[t.timestamp >= pd.Timestamp(split, tz="UTC").timestamp()]
     log.info("big-trade signal")
     big = cached("bigtrades", lambda: study.big_trade_signal(t2))
     del t2
     log.info("walk-forward")
-    wf = cached("walkforward", lambda: _walk(t, walk_start, walk_end))
+    wf = cached("walkforward", lambda: _walk(t, walk_start, walk_end, meta))
     log.info("skilled-wallet decomposition")
-    dec_sk = cached("skilled_decomp", lambda: study.decompose_skilled(t, split))
+    dec_sk = cached("skilled_decomp", lambda: study.decompose_skilled(t, split, meta=meta))
     wfa = wf.groupby(["scope", "rule", "delay"]).apply(lambda x: pd.Series({
         "months": len(x), "trades": x.trades.sum(), "copy_roi": x["pnl_per_$1"].sum() / x.staked.sum(),
         "months_positive": (x["pnl_per_$1"] > 0).mean()}), include_groups=False).reset_index()
@@ -63,29 +94,29 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     for name, df in [("wallets_families", fams), ("wallets_rules", rules), ("wallets_deciles", decs),
                      ("wallets_bigtrades", big), ("wallets_walkforward", wfa), ("wallets_skilled_decomp", dec_sk)]:
         df.to_csv(REPORTS / f"{name}.csv", index=False)
-    (REPORTS / "WALLETS.md").write_text(_render(t, fams, rules, decs, big, wfa, lb, split, dec_sk))
+    (REPORTS / "WALLETS.md").write_text(_render(t, fams, rules, decs, big, wfa, lb, split, dec_sk, run_id))
     log.info("wrote %s", REPORTS / "WALLETS.md")
 
 
-def _walk(t, walk_start, walk_end) -> pd.DataFrame:
-    wf = [study.walk_forward(t, walk_start, walk_end, delays=(0, 1, 5, 30)).assign(scope="all"),
+def _walk(t, walk_start, walk_end, meta) -> pd.DataFrame:
+    wf = [study.walk_forward(t, walk_start, walk_end, delays=(0, 1, 5, 30), meta=meta).assign(scope="all"),
           study.walk_forward(t[~t.in_play], walk_start, walk_end, rules=("z", "random"),
-                             delays=(0, 60, 300)).assign(scope="pregame")]
+                             delays=(0, 60, 300), meta=meta).assign(scope="pregame")]
     for fam in ("soccer", "tennis", "basketball", "baseball", "esports", "hockey", "american_football"):
         tf = t[t.family == fam]
         if len(tf) > 100_000:
             wf.append(study.walk_forward(tf, walk_start, walk_end, rules=("z", "random"),
-                                         delays=(0, 5, 30)).assign(scope=fam))
+                                         delays=(0, 5, 30), meta=meta).assign(scope=fam))
     return pd.concat([w for w in wf if len(w)], ignore_index=True)
 
 
-def _families(t, lb, split):
+def _families(t, lb, split, meta):
     fam_rows, rule_tables, deciles = [], [], []
     for fam in ["ALL"] + FAMILIES:
         tf = t if fam == "ALL" else t[t.family == fam]
         if tf.timestamp.min() >= pd.Timestamp(split, tz="UTC").timestamp() or len(tf) < 50_000:
             continue
-        r = study.run(tf, split, lb if fam == "ALL" else None, fam)
+        r = study.run(tf, split, lb if fam == "ALL" else None, fam, meta=meta)
         plc = r["placebo"]
         fam_rows.append({"family": fam, "fills": len(tf), "p1_wallets": r["n_p1_wallets"],
                          "p2_wallets": r["n_p2_wallets"], "active_both": r["n_both"],
@@ -105,10 +136,10 @@ def _families(t, lb, split):
     return fams, rules, decs
 
 
-def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None) -> str:
+def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None, run_id="") -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     L = [f"# Can you copy skilled sports bettors on Polymarket? ({now})", "",
-         "Generated by `python -m pmsports wallets-report`. Data: every taker fill (wallet-attributed) in "
+         f"Generated by `python -m pmsports wallets-report` (Run ID: {run_id}). Data: every taker fill (wallet-attributed) in "
          f"{t.condition_id.nunique():,} resolved sports moneyline markets with >= $50k volume, "
          f"{len(t):,} fills from {t.proxyWallet.nunique():,} wallets. Selection uses only data before "
          f"{split}; evaluation only data after (no look-ahead). A follower copies each trade at the first "
@@ -170,3 +201,4 @@ def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None) -> str:
               "on-chain volume traded as taker (CryptoHouse OrderFilled events). Makers earn the spread and "
               "rebates; their edge cannot be copied by a taker.", "", _md(g, ".4f"), ""]
     return "\n".join(L)
+
