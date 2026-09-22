@@ -24,8 +24,22 @@ INDEX = LEDGERS / "_index.json"
 log = logging.getLogger("pmsports.webapp")
 
 app = FastAPI(title="Polymarket research", docs_url=None, redoc_url=None)
+
+@app.middleware("http")
+async def add_noindex(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Robots-Tag"] = "noindex"
+    return response
+
+@app.get("/robots.txt")
+def robots():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("User-agent: *\nDisallow: /", headers={"X-Robots-Tag": "noindex"})
+
 _cache: dict[str, dict] = {}
 _lock = threading.Lock()
+_index_lock = threading.Lock()
+INDEX_VERSION = 2
 
 SPORT_LABEL = {"baseball": "Baseball", "soccer": "Soccer", "american_football": "Football",
                "basketball": "Basketball", "tennis": "Tennis", "esports": "Esports",
@@ -40,57 +54,109 @@ SPORT_ALIAS = {"cs2": "esports", "dota2": "esports", "lol": "esports", "val": "e
 
 
 def _fam(s: str) -> str:
-    s = (s or "").strip().lower()
-    return SPORT_ALIAS.get(s, s)
+    s = str(s).strip().lower() if pd.notna(s) else ""
+    sp = SPORT_ALIAS.get(s, s)
+    return sp if sp in TAB_ORDER else "other"
+
+
+def _ledger_files() -> list[Path]:
+    return sorted(f for f in LEDGERS.glob("*.json") if not f.name.startswith(("_", ".")))
+
+
+def _read_ledger(f: Path) -> tuple[dict, pd.DataFrame]:
+    doc = json.loads(f.read_text())
+    if doc.get("slug") != f.stem:
+        raise ValueError("ledger slug must match its filename")
+    df = pd.DataFrame(doc["rows"], columns=doc["columns"])
+    required = {"id", "entry_ts", "stake_usd", "fee_usd", "pnl_usd", "sport", "period"}
+    missing = required - set(df.columns)
+    if missing or not df.columns.is_unique:
+        raise ValueError(f"invalid ledger columns; missing={sorted(missing)}")
+    for c in ("entry_ts", "entry_price", "stake_usd", "fee_usd", "exit_price", "payout", "pnl_usd", "roi"):
+        if c in df:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return doc, df
 
 
 def _load(slug: str) -> dict:
-    with _lock:
-        if slug in _cache:
-            return _cache[slug]
+    if not slug or slug.startswith("_") or not slug.replace("-", "").replace("_", "").isalnum():
+        raise HTTPException(400, "invalid slug")
     f = LEDGERS / f"{slug}.json"
     if not f.exists():
         raise HTTPException(404, f"no ledger {slug}")
-    doc = json.loads(f.read_text())
-    df = pd.DataFrame(doc["rows"], columns=doc["columns"])
-    for c in ("entry_price", "stake_usd", "fee_usd", "exit_price", "payout", "pnl_usd", "roi"):
-        if c in df:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    deployed = df.get("stake_usd", pd.Series(0, index=df.index)).fillna(0) + df.get("fee_usd", pd.Series(0, index=df.index)).fillna(0)
-    df["roi_deployed"] = np.where(deployed > 0, df.pnl_usd / deployed.replace(0, np.nan), df.get("roi"))
-    doc = {k: v for k, v in doc.items() if k != "rows"}
-    entry = {"meta": doc, "df": df}
+    st = f.stat()
+    mkey = (st.st_mtime_ns, st.st_size)
+    with _lock:
+        if slug in _cache and _cache[slug].get("mkey") == mkey:
+            return _cache[slug]
+    try:
+        doc, df = _read_ledger(f)
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(500, f"malformed ledger {slug}: {e}") from e
+    deployed = df.stake_usd.fillna(0) + df.fee_usd.fillna(0)
+    df["roi_deployed"] = df.pnl_usd / deployed.where(deployed > 0)
+    entry = {"meta": {k: v for k, v in doc.items() if k != "rows"}, "df": df, "mkey": mkey}
     with _lock:
         _cache[slug] = entry
-        if len(_cache) > 8:                       # keep memory flat: drop the oldest
+        if len(_cache) > 8:
             _cache.pop(next(iter(_cache)))
     return entry
 
 
+def _calc_kpis(df: pd.DataFrame) -> dict:
+    res = {}
+    for p in ["dev", "holdout"]:
+        pdf = df[df.period == p] if "period" in df else df
+        if pdf.empty: continue
+        dep = (pdf.get("stake_usd", pd.Series(0, index=pdf.index)).fillna(0) + pdf.get("fee_usd", pd.Series(0, index=pdf.index)).fillna(0)).sum()
+        pnl = pdf.get("pnl_usd", pd.Series(0, index=pdf.index)).sum()
+        res[p] = {"roi": float(pnl / dep) if dep else None, "bets": len(pdf)}
+    return res
+
 def build_index(force: bool = False) -> list[dict]:
-    if INDEX.exists() and not force:
-        try:
-            return json.loads(INDEX.read_text())
-        except Exception:
-            pass
-    out = []
-    for f in sorted(LEDGERS.glob("*.json")):
-        if f.name.startswith("_"):
-            continue
-        doc = json.loads(f.read_text())
-        df = pd.DataFrame(doc["rows"], columns=doc["columns"])
-        counts = df.sport.map(_fam).value_counts().to_dict() if "sport" in df else {}
-        out.append({
-            "slug": doc["slug"], "title": doc.get("title", doc["slug"]), "group": doc.get("group", ""),
-            "sport": doc.get("sport", ""), "verdict": doc.get("verdict", ""),
-            "hypothesis": doc.get("hypothesis", ""), "headline": doc.get("headline", {}),
-            "n_total_trades": doc.get("n_total_trades", len(df)), "rows_available": len(df),
-            "sport_counts": {k: int(v) for k, v in counts.items()},
-            "report_path": doc.get("report_path", ""), "code_path": doc.get("code_path", ""),
-            "page_sampled": bool(doc.get("truncated")),
-        })
-    INDEX.write_text(json.dumps(out, separators=(",", ":")))
-    return out
+    # Exclude our own sidecars: writing the index must not invalidate itself.
+    # Serialize rebuilds so concurrent clients do not each parse the full corpus.
+    with _index_lock:
+        ledgers = _ledger_files()
+        fingerprint = []
+        for f in ledgers:
+            st = f.stat()
+            fingerprint.append([f.name, st.st_mtime_ns, st.st_size])
+        if INDEX.exists() and not force:
+            try:
+                cached = json.loads(INDEX.read_text())
+                if cached.get("version") == INDEX_VERSION and cached.get("fingerprint") == fingerprint:
+                    return cached["strategies"]
+            except (ValueError, KeyError, AttributeError):
+                pass
+        out = []
+        for f in ledgers:
+            try:
+                doc, df = _read_ledger(f)
+                counts = df.sport.map(_fam).value_counts().to_dict()
+                kpis = {"all": _calc_kpis(df)}
+                for sp, sdf in df.groupby(df.sport.map(_fam)):
+                    kpis[sp] = _calc_kpis(sdf)
+                out.append({
+                    "slug": doc["slug"], "title": doc.get("title", doc["slug"]), "group": doc.get("group", ""),
+                    "sport": doc.get("sport", ""), "verdict": doc.get("verdict", ""),
+                    "hypothesis": doc.get("hypothesis", ""), "headline": doc.get("headline", {}),
+                    "kpis": kpis,
+                    "n_total_trades": doc.get("n_total_trades", len(df)), "rows_available": len(df),
+                    "sport_counts": {k: int(v) for k, v in counts.items()},
+                    "report_path": doc.get("report_path", ""), "code_path": doc.get("code_path", ""),
+                    "page_sampled": bool(doc.get("truncated")),
+                })
+            except (ValueError, KeyError, TypeError) as e:
+                out.append({
+                    "slug": f.stem, "title": f"Cannot read: {f.name}", "verdict": "ERROR", "error": str(e),
+                    "n_total_trades": 0, "rows_available": 0, "kpis": {"all": {}}, "sport_counts": {},
+                })
+        INDEX.parent.mkdir(parents=True, exist_ok=True)
+        tmp = INDEX.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"version": INDEX_VERSION, "fingerprint": fingerprint, "strategies": out}, separators=(",", ":")))
+        tmp.replace(INDEX)
+        return out
 
 
 @app.get("/api/index")
@@ -113,12 +179,16 @@ def api_strategy(slug: str):
     df = e["df"]
     by_sport = []
     if "sport" in df:
-        for sp, g in df.groupby("sport"):
+        canon_sport = df.sport.map(_fam)
+        for sp, g in df.groupby(canon_sport):
             dep = (g.stake_usd.fillna(0) + g.fee_usd.fillna(0)).sum()
             by_sport.append({"sport": sp, "trades": int(len(g)), "pnl": float(g.pnl_usd.sum()),
                              "roi": float(g.pnl_usd.sum() / dep) if dep else None})
+        sports = sorted(canon_sport.dropna().unique().tolist())
+    else:
+        sports = []
     return {"meta": e["meta"], "by_sport": sorted(by_sport, key=lambda d: -d["trades"]),
-            "sports": sorted(df.sport.dropna().unique().tolist()) if "sport" in df else [],
+            "sports": sports,
             "periods": sorted(df.period.dropna().unique().tolist()) if "period" in df else []}
 
 
@@ -132,16 +202,19 @@ def _filter(df: pd.DataFrame, period: str, sport: str, result: str, q: str) -> p
     elif result == "loss":
         df = df[df.pnl_usd < 0]
     elif result == "void":
-        df = df[df.exit_price == 0.5]
+        df = df[(df.get("exit_price", pd.Series(index=df.index, dtype=float)) == 0.5) &
+                (df.get("exit_kind", pd.Series("", index=df.index)) == "resolution")]
     if q:
         ql = q.lower()
-        hay = df.get("event", "").astype(str) + " " + df.get("side", "").astype(str) + " " + df.get("note", "").astype(str)
+        hay = pd.Series("", index=df.index)
+        for col in ("event", "side", "note"):
+            hay = hay + " " + df.get(col, pd.Series("", index=df.index)).fillna("").astype(str)
         df = df[hay.str.lower().str.contains(ql, regex=False)]
     return df
 
 
 @app.get("/api/strategy/{slug}/trades")
-def api_trades(slug: str, offset: int = 0, limit: int = Query(100, le=1000), period: str = "all",
+def api_trades(slug: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=1000), period: str = "all",
                sport: str = "all", result: str = "all", q: str = "", sort: str = "entry_ts",
                desc: bool = False):
     e = _load(slug)
@@ -153,18 +226,18 @@ def api_trades(slug: str, offset: int = 0, limit: int = Query(100, le=1000), per
     return JSONResponse({
         "total": int(len(df)), "offset": offset, "limit": limit,
         "pnl": float(df.pnl_usd.sum()), "roi": float(df.pnl_usd.sum() / dep) if dep else None,
-        "wins": int((df.pnl_usd > 0).sum()), "columns": list(page.columns),
+        "wins": int((df.pnl_usd > 0).sum()), "kpis": _calc_kpis(df), "columns": list(page.columns),
         "rows": json.loads(page.to_json(orient="values")),
     })
 
 
 @app.get("/api/strategy/{slug}/equity")
 def api_equity(slug: str, period: str = "all", sport: str = "all", result: str = "all", q: str = "",
-               points: int = Query(600, le=2000)):
+               points: int = Query(600, ge=2, le=2000)):
     e = _load(slug)
     df = _filter(e["df"], period, sport, result, q).sort_values("entry_ts", kind="stable")
     if df.empty:
-        return {"points": [], "holdout_at": None}
+        return {"n": 0, "points": [], "holdout_at": None, "dates": []}
     cum = df.pnl_usd.fillna(0).cumsum().to_numpy()
     n = len(cum)
     idx = np.unique(np.linspace(0, n - 1, min(points, n)).astype(int))
@@ -179,8 +252,9 @@ def api_equity(slug: str, period: str = "all", sport: str = "all", result: str =
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "ledgers": len(list(LEDGERS.glob("*.json"))) - (1 if INDEX.exists() else 0),
-            "cached": list(_cache)}
+    index = build_index()
+    errors = [{"slug": d["slug"], "error": d["error"]} for d in index if d.get("error")]
+    return {"ok": not errors, "ledgers": len(index), "errors": errors, "cached": list(_cache)}
 
 
 @app.post("/api/reindex")

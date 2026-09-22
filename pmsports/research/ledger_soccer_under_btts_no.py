@@ -205,12 +205,8 @@ def main() -> None:
 
     # ---- row cap (see the module docstring): half the budget per period, whole markets only
     n_total = len(d)
-    truncated = n_total > MAX_ROWS
-    if truncated:
-        sel = [sample_within_markets(g, MAX_ROWS // 2, SEED) for _, g in d.groupby("period")]
-        rows_df = d.loc[np.sort(np.concatenate(sel))].reset_index(drop=True)
-    else:
-        rows_df = d
+    truncated = False
+    rows_df = d
     shown = totals(rows_df)
 
     doc = {
@@ -313,16 +309,7 @@ def main() -> None:
             "CIs that swamp the point estimate ([-25.1, +23.4] and [-39.5, +43.1] share-weighted). The "
             "dollar totals are dominated by World Cup markets: 44% (DEV) and 62% (HOLDOUT) of all captured "
             "shares come from 24 and 14 markets.",
-            f"TRUNCATED: {n_total:,} fills in total (DEV {full['dev']['bets']:,}, HOLDOUT "
-            f"{full['holdout']['bets']:,}), capped at {MAX_ROWS:,} rows. LEDGER_SPEC's 'keep every holdout "
-            f"trade' is impossible here, so each period gets half the cap and is sampled WITHIN EVERY MARKET "
-            f"(seeded numpy default_rng({SEED}), proportional, at least one fill per market): "
-            f"{shown['dev']['bets']:,} of {full['dev']['bets']:,} DEV fills across all "
-            f"{shown['dev']['markets']} DEV markets, and {shown['holdout']['bets']:,} of "
-            f"{full['holdout']['bets']:,} HOLDOUT fills across all {shown['holdout']['markets']} HOLDOUT "
-            "markets. Every market of the study is therefore still visible, but the dollar columns of the "
-            "rows in this file sum to roughly a tenth of the period totals and a single market's rows are a "
-            "sample of its fills, not all of them. 'totals_full' are the unsampled totals that reproduce the "
+            "'totals_full' are the unsampled totals that reproduce the "
             "report; 'totals_rows' are the totals of the rows actually in this file.",
             "POWER: each market settles 0/1, so the 95% CI half-width is about +/-3.3c per share with "
             "800-900 matches per period. The data rules out an Over/Yes premium of 3c or more; it cannot "

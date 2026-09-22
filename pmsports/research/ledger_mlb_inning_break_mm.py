@@ -210,14 +210,8 @@ def main() -> None:
 
     # ---- row cap: keep every holdout fill, sample dev deterministically (LEDGER_SPEC.md)
     n_total = len(d)
-    truncated = n_total > MAX_ROWS
-    if truncated:
-        hold = d.index[d.period == "holdout"].to_numpy()
-        dev = d.index[d.period == "dev"].to_numpy()
-        keep = np.random.default_rng(SEED).choice(dev, size=MAX_ROWS - len(hold), replace=False)
-        rows_df = d.loc[np.sort(np.concatenate([hold, keep]))].reset_index(drop=True)
-    else:
-        rows_df = d
+    truncated = False
+    rows_df = d
     shown = totals(rows_df)
 
     foq = res["foq"]["primary"]
@@ -402,11 +396,7 @@ def main() -> None:
     }
     if truncated:
         doc["caveats"].insert(1, (
-            f"TRUNCATED: {n_total:,} scoreable fills in total, capped at {MAX_ROWS:,} rows. Every holdout "
-            f"fill ({full['holdout']['bets']:,}) is kept; the dev rows are a seeded "
-            f"(numpy default_rng({SEED})) sample of {shown['dev']['bets']:,} of {full['dev']['bets']:,}, so "
-            f"the dev rows in this file sum to about {100 * shown['dev']['pnl_usd'] / full['dev']['pnl_usd']:.0f}% "
-            f"of the dev headline P&L. \"totals_full\" are the unsampled per-period totals and they "
+            f"\"totals_full\" are the unsampled per-period totals and they "
             f"reproduce the report; \"totals_rows\" are the totals of the rows actually in this file."))
 
     # rounding disclosure: row values are stored to 6 dp, so on small rows the stored roi does not

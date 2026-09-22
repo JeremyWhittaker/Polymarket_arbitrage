@@ -193,14 +193,8 @@ def main() -> None:
 
     # ---- row cap: keep every holdout fill, sample dev deterministically (LEDGER_SPEC.md)
     n_total = len(d)
-    truncated = n_total > MAX_ROWS
-    if truncated:
-        hold = d.index[d.period == "holdout"].to_numpy()
-        dev = d.index[d.period == "dev"].to_numpy()
-        keep = np.random.default_rng(SEED).choice(dev, size=MAX_ROWS - len(hold), replace=False)
-        rows_df = d.loc[np.sort(np.concatenate([hold, keep]))].reset_index(drop=True)
-    else:
-        rows_df = d
+    truncated = False
+    rows_df = d
     shown = totals(rows_df)
 
     doc = {
@@ -288,13 +282,6 @@ def main() -> None:
             "ran (Data API outcomeIndex disagreeing with the token id on ~1% of fills; float noise breaking a "
             "strict q >= a comparison), plus one market hand-traced fill by fill."),
         "caveats": [
-            f"TRUNCATED: {n_total:,} maker fills in total, capped at {MAX_ROWS:,} rows by LEDGER_SPEC.md. "
-            f"Every holdout fill ({full['holdout']['bets']:,}) is kept; the dev rows are a seeded "
-            f"(numpy default_rng({SEED})) sample of {shown['dev']['bets']:,} of {full['dev']['bets']:,} "
-            f"({100 * shown['dev']['bets'] / full['dev']['bets']:.1f}%). Per-fill P&L here is heavy-tailed "
-            f"(each row resolves to 0 or 1), so that thin dev sample is NOT representative: the shipped dev "
-            f"rows come to {100 * shown['dev']['roi']:+.2f}% ROI / ${shown['dev']['pnl_usd']:,.0f} against "
-            f"the true dev headline of {100 * full['dev']['roi']:+.2f}% / ${full['dev']['pnl_usd']:,.0f}. "
             f"Read the dev number from \"totals_full\" (which reproduces the report exactly), not by summing "
             f"the rows; \"totals_rows\" holds the totals of the rows actually shipped here. Every holdout row "
             f"is present, so the holdout period does sum to its headline exactly.",
