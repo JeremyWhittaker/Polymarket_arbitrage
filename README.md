@@ -41,6 +41,11 @@ these free feeds before the market moves; it does not measure a trading return o
   must use each market's metadata. Current venue rules are documented in
   [fees](https://docs.polymarket.com/trading/fees) and
   [order lifecycle](https://docs.polymarket.com/concepts/order-lifecycle).
+- The [shared execution protocol](reports/EXECUTION_PROTOCOL.md) requires a strictly later
+  acquired-side print, excludes a copied leader's own transactions, consumes each print's
+  shares once, and retains partial fills and no-fills. Actual allocated capital includes fees.
+  The rebuilt compact cache contains 53,771,660 valid fills across 38,370 markets; existing
+  market IDs are preserved. This remains a selected historical sample.
 
 ## Run
 

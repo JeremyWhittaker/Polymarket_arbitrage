@@ -26,3 +26,11 @@ Fresh-environment full suite:35passed,1optionalbrowser-test skipped. Separate br
 Recovered live replay of2026-09-19:61 qualifying scoring events across14games, selected for subsequent move>=3c. Median bookt50=2.856s, MLBfeed=41.095s, PMsportsfeed=71.412s relative to retrospective contact time. Paired median feedminusbook=37.114s and67.625s respectively. MLBfeed precededbook in1/61, PMsports0/61. This one selected capture provides adverse timing evidence for free-feed reaction, not a universal latency bound or trading PnL.
 
 Fullcorpus strategy reruns, execution completion, nine unfinished selected sports protocols and final viability synthesis remain in progress. Historical reports retain no fresh-holdout status.
+
+## Execution and full compact-cache checkpoint
+
+Accepted b9ecdee: 57 tests passed, one optional browser test skipped in the fresh QA environment. The shared replay enforces strictly later acquired-side entries, leader exclusion, quantity and event caps, actual fees, shared remaining print capacity, partials and no-fills. All 50 threshold ledgers have a tested complete export path. Independent strategy comparisons reset liquidity separately; the wallet cache now includes the shared execution dependency. This validates code behavior, not a profitable result.
+
+The first full rebuild exposed an empty-tape Arrow null/string mismatch. Regression and repair 2d5bff9 passed before the retry. The completed retry contains 53,771,660 fills and 38,370 markets; all 38,364 pre-existing market IDs are unchanged. Independent source/output manifest validation and complementary settlement payout checks passed. Corrected pregame coverage was regenerated for 38,423 moneyline markets.
+
+Finite coverage diagnostics added six formerly absent markets (1,552 fills) and upgraded six legacy tapes from 5,320 to 5,797 fills. Earlier timestamps recovered by those upgrades prove the old bounded windows omitted history. These twelve targeted markets do not establish an unbiased population or complete provider history.

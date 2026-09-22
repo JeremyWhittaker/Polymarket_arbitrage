@@ -6,7 +6,7 @@ User instruction: resume Claude's work, fix the peer-review findings, and establ
 |---|---|---|
 | Causal market universe and volume screening | implemented | Default eventual-volume floor removed; favorite decision/volume strictly predecision. Existing corpus remains selected; backfill/reruns tracked below. tests/test_coverage.py. |
 | Wallet selection using only known fills/outcomes | implemented | study._causal_cutoff; fills sliced before monthly aggregation; known closed_ts required. Independent cutoff checks passed; full results rerun remains below. |
-| Explicit signal/entry timing and size-limited execution | deferred | Shared execution corrections and study reruns. |
+| Explicit signal/entry timing and size-limited execution | implemented | b9ecdee shared replay: strict later entry, acquired side, consumed shares, fee-inclusive event caps, partials/no-fills; 57 tests pass. Full results reruns remain below. |
 | MLB state transitions, runner rules and causal reference pricing | implemented | Unique third-out transitions, game-type/scheduled-inning rules and strictly preceding raw-timestamp references; real game778480 rebuild and future-append invariance passed. Execution completion and corpus rebuild remain below. |
 | Holdout discipline, weighting and statistical claims | deferred | Relabel explored history; report uncertainty and freeze prospective rules. |
 | Cache provenance and invalidation | implemented | Wallet caches bind dependency code, input identities and requested dates; atomic publication. Tape add/change/delete and split-change checks passed. |
@@ -20,6 +20,7 @@ User instruction: resume Claude's work, fix the peer-review findings, and establ
 | Backfill measured research coverage | deferred | Finite creation metadata/tape upgrades and source-coverage audit before final strategy conclusions. |
 | Rebuild MLB corpus and rerun corrected wallet statistics | deferred | Code checkpoint accepted; full jobs follow execution/coverage changes to avoid presenting stale results. |
 | Corrected whale and esports lead evaluation | deferred | Causal, size-limited sensitivity with game-clustered uncertainty. |
+| Literal trade-to-mean exit and actual received-book replay | deferred | Original prompt requires an exit at the mean, not settlement-only bets. Bounded Sep19 book/receipt experiment with prior-season state model, bid-depth exits, timeout, fees and residual settlement; live-book-task.md defines fixed protocol before implementation. |
 | Desktop/mobile QA and deployed desk | implemented | Actual25ledger desktop1440/mobile390 visual QA passed; accepted8d9143e pushed, user service restarted and localhost/Tailscale target checked. |
 | Final viability decision and reproducible results | deferred | Fresh results report distinguishing negative, inconclusive and genuinely validated evidence. |
 
