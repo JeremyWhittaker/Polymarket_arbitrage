@@ -87,6 +87,20 @@ fill there is $11 and the top 1% of fills carry 56% of the dollars. Every tradab
 buying the first print in a 73-76c band (dev -0.7%, holdout -1.0%) and every "buy once it crosses T"
 threshold from 50c to 99c, in both windows.
 
+## Open lead: big tickets at exactly 74-75c — [`pmsports/analysis/whale_prices.py`](pmsports/analysis/whale_prices.py)
+
+Chasing the 74-75c bump found something unexplained. Taker fills of >= $10k at **exactly 74c and
+75c** won 82.3% / 80.6% against those prices: **+10.6% and +7.1%** per $1 after fees, positive in
+both development and holdout, across 1,016 wallets, 1,090 games and 8 sports, and still +8.3% after
+dropping the 50 best games. A follower entering 3 seconds later on the same side keeps essentially
+all of it (+10.6% / +6.6%). Ordinary-sized fills at the same prices earn ~+1%.
+
+It is NOT an edge to trade, because it does not generalise: 73c, 76c, 77c, 80c, 85c, 90c and 95c are
+flat or negative for the same whale filter, and nothing structural distinguishes these trades
+(negRisk share 0.29 vs 0.30, in-play share 0.36 vs 0.40, ticket sizes, leagues and months all
+ordinary). Information does not switch on at 74c and off at 73c. Treat as an anomaly to explain
+before anything else: `reports/whale_prices.csv` reproduces the table.
+
 ## Threshold strategies — [`reports/THRESHOLDS.md`](reports/THRESHOLDS.md)
 
 - **Bet any team priced >= T pregame (T = 50c..90c), per sport:** no threshold is profitable

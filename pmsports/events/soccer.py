@@ -10,30 +10,66 @@ Pipeline (each stage caches; re-runs are cheap):
     python -m pmsports.events.soccer panel        # 5. state x price panel
     python -m pmsports.events.soccer validate     # 6. checks + coverage report
 
-Outputs (under data/events/soccer/):
-    games.parquet    one row per matched game: our event_slug + the three market codes
-                     (home / draw / away legs), payouts, kickoff, ESPN id + final score.
-    events.parquet   one row per ESPN keyEvent: wallclock, period, clock seconds, type,
-                     team, running score after the event.
-    panel.parquet    one row per event x game: the three legs' prices before the event and
-                     at +3/+10/+30/+60/+300 s after it, plus the final payouts.
+Load the results with `games()`, `events()` and `panel()` (see those functions).
 
-Raw ESPN JSON is cached gzipped under data/events/soccer/{scoreboard,summary}/.
+Outputs (under data/events/soccer/):
+    games.parquet    4,775 matched games: our event_slug, the three market codes and
+                     condition ids (home / draw / away legs), payouts, kickoff, ESPN id,
+                     ESPN team names and final score, match diagnostics.
+    events.parquet   106,787 ESPN key events: wallclock, period, clock_s (elapsed seconds,
+                     so minute = clock_s/60), kind, team_side, scoring_side, the running
+                     score after the event, lead, and the raw text.
+    panel.parquet    106,519 event x game rows: everything in events.parquet plus, for each
+                     of the three legs, the price before the event (p_<leg>_pre) and at
+                     -10/-30/-60 s (p_<leg>_m10..m60) and +3/+10/+30/+60/+300 s
+                     (p_<leg>_h3..h300), staleness, local trade counts, and the payouts.
+
+Raw ESPN JSON is cached gzipped under data/events/soccer/{scoreboard,summary}/; legs too
+thin for fills.parquet are backfilled from the Data API into data/events/soccer/extra_fills/.
+
+Column key (panel)
+------------------
+    p_<leg>_pre      last YES print with ts <= wallclock              age_<leg>_pre  its age
+    p_<leg>_m10/30/60  last YES print with ts <= wallclock - offset
+    p_<leg>_h3..h300 first YES print with ts >= wallclock + h    lag_<leg>_h*  its true offset
+    n_<leg>_5m       fills on that leg in the 5 min before the event (liquidity)
+    src_<leg>        0 none, 1 fills.parquet, 2 Data-API backfill
+    y_<leg>          payout of that leg (1 win, 0 lose, 0.5 void)
+    reg_home/reg_away/reg_result   score and result at 90 minutes (what the market settles on)
+    ft_home/ft_away, had_et, had_shootout, home_score/away_score (ESPN header, incl. ET)
+    feed_consistent  goal-event count == goals in the final score AND >= 5 events (an
+                     outcome-free data-quality flag; `panel(clean=True)` applies it)
 
 Price conventions
 -----------------
 Every soccer market here is a binary Yes/No market ("Will X win?", "... draw"), with
 `o0 == "Yes"`.  A fill records the price `q` the taker paid for side `s`; the implied
-price of YES is `q if s == 0 else 1 - q`.  All `p_*` columns in the panel are YES prices,
-i.e. the market-implied probability of that leg.
+price of YES is `q if s == 0 else 1 - q`.  All `p_*` columns are YES prices, i.e. the
+market-implied probability of that leg.  The three legs sum to a median 1.001.
+
+Three things that will fake an edge here
+----------------------------------------
+1.  **ESPN's wallclock is not the moment the goal became public.**  Measured on 11,673
+    goals, the scoring team's leg has already moved a median +0.030 by the last print at
+    or before the wallclock, +0.138 by +3 s, and +0.180 by +60 s.  The wallclock is when
+    ESPN's operator typed the event; the market is seconds ahead of it.  `p_*_pre` is NOT
+    an uninformed pre-goal price - use `p_*_m60` if you need one, and never "buy at the
+    pre-goal price".
+2.  **Polymarket settles on REGULATION time.**  A cup tie won in extra time or on
+    penalties pays the DRAW leg.  `espn_result` (ESPN's header) disagrees with the payouts
+    on 0.6% of games; `reg_result` agrees on 99.75%.  Always use `reg_*`.
+3.  **The draw leg is the thin one.**  Only 58.7% of event rows have a draw price at all
+    (85.2% home, 74.0% away), because a leg needs $50k of volume to be in fills.parquet -
+    and 1,305 missing legs were backfilled from the Data API precisely to reduce that.
+    Never select games on `volume`: it includes in-play trading.
 
 Execution honesty
 -----------------
 Fill timestamps are on-chain settlement times, a median 2.6 s AFTER the trade, while
 `wallclock` is the real-world time of the event.  So a fill with `ts <= wallclock` was
-certainly agreed before the event (that is the `_pre` column), and a fill with
+agreed ~2.6 s before the wallclock (that is the `_pre` column), and a fill with
 `ts >= wallclock + h` is a print you could only have taken at or after `wallclock + h`
-(those are the `_h3 .. _h300` columns).  `_h3` is the earliest execution-legal entry.
+(the `_h3 .. _h300` columns).  `_h3` is the earliest execution-legal entry.
 """
 from __future__ import annotations
 
@@ -68,6 +104,9 @@ WORKERS = 8
 
 # Horizons (seconds after the event wallclock) at which we take the next print on each leg.
 HORIZONS = (3, 10, 30, 60, 300)
+# Offsets (seconds BEFORE the wallclock) at which we take the last print - `p_x_m60` vs
+# `p_x_pre` shows whether the market had already moved before ESPN stamped the event.
+PRE_OFFSETS = (10, 30, 60)
 LEGS = ("home", "draw", "away")
 
 # ---------------------------------------------------------------------- league -> ESPN path
@@ -803,20 +842,19 @@ def build_events(verbose: bool = True) -> pd.DataFrame:
             side = "home" if tid and tid == hid else ("away" if tid and tid == aid else "")
             parsed = _score_from_text(txt, hn, an)
             shoot = bool(e.get("shootout"))
+            psh, psa = sh, sa
             if parsed and not shoot:
                 sh, sa = parsed
             elif kind in ("goal", "penalty_goal", "own_goal") and not shoot:
                 noscore += 1
-                if kind == "own_goal":         # ESPN tags the conceding team
-                    if side == "home":
-                        sa += 1
-                    elif side == "away":
-                        sh += 1
-                else:
-                    if side == "home":
-                        sh += 1
-                    elif side == "away":
-                        sa += 1
+                # ESPN tags an own goal with the team that BENEFITS from it, exactly like a
+                # normal goal (verified on 321 own goals whose text also carries the score:
+                # 98.4% agree with the side that gained, 0% with the side that conceded).
+                if side == "home":
+                    sh += 1
+                elif side == "away":
+                    sa += 1
+            scoring_side = "home" if sh > psh else ("away" if sa > psa else "")
             wc = _ts(e.get("wallclock"))
             rows.append({
                 "event_slug": r.event_slug, "espn_path": r.espn_path, "espn_id": r.espn_id,
@@ -828,6 +866,7 @@ def build_events(verbose: bool = True) -> pd.DataFrame:
                 "type_raw": tp, "type_text": (e.get("type") or {}).get("text") or "",
                 "kind": kind, "scoring": bool(e.get("scoringPlay")), "shootout": shoot,
                 "team_side": side, "team_name": (e.get("team") or {}).get("displayName") or "",
+                "scoring_side": scoring_side,
                 "score_home": sh, "score_away": sa, "lead": sh - sa,
                 "score_parsed": parsed is not None,
                 "text": txt[:300],
@@ -840,6 +879,7 @@ def build_events(verbose: bool = True) -> pd.DataFrame:
     for c in ("period", "score_home", "score_away", "lead", "idx"):
         ev[c] = ev[c].astype("int16")
     ev.to_parquet(EVENTS, index=False)
+    _augment_games(g, ev)
     if verbose:
         print(f"events.parquet: {len(ev):,} rows over {ev.event_slug.nunique():,} games")
         print("  kinds:", dict(kinds.most_common(14)))
@@ -897,11 +937,31 @@ def regulation_scores(ev: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
+def _augment_games(g: pd.DataFrame, ev: pd.DataFrame) -> pd.DataFrame:
+    """Write the regulation score and the feed-quality flags back into games.parquet."""
+    g = g.drop(columns=[c for c in ("reg_home", "reg_away", "ft_home", "ft_away", "had_et",
+                                    "had_shootout", "reg_result", "reg_agrees",
+                                    "game_n_events", "game_n_goals", "feed_consistent")
+                        if c in g.columns])
+    g = g.merge(regulation_scores(ev), on="event_slug", how="left")
+    g["reg_agrees"] = g.reg_result == g.pm_result
+    qual = ev.groupby("event_slug").agg(
+        game_n_events=("idx", "size"),
+        game_n_goals=("kind", lambda c: int(c.isin(["goal", "penalty_goal", "own_goal"]).sum())))
+    g = g.merge(qual, on="event_slug", how="left")
+    # internal consistency, free of any outcome information: does the number of goal events
+    # equal the goals in the regulation + extra-time score?
+    g["feed_consistent"] = (g.game_n_goals.fillna(-1) == (g.ft_home + g.ft_away)) & \
+                           (g.game_n_events >= 5)
+    g.to_parquet(GAMES, index=False)
+    return g
+
+
 def build_panel(verbose: bool = True) -> pd.DataFrame:
     g = pd.read_parquet(GAMES)
     ev = pd.read_parquet(EVENTS)
-    g = g.merge(regulation_scores(ev), on="event_slug", how="left")
-    g["reg_agrees"] = g.reg_result == g.pm_result
+    if "reg_result" not in g.columns:
+        g = _augment_games(g, ev)
     ev = ev[np.isfinite(ev.wallclock)].copy()
 
     keep = ["event_slug", "league", "espn_path", "espn_id", "date", "game_start_ts",
@@ -913,7 +973,7 @@ def build_panel(verbose: bool = True) -> pd.DataFrame:
             "reg_home", "reg_away", "ft_home", "ft_away", "had_et", "had_shootout",
             "reg_result", "reg_agrees",
             "pre_usd", "pre_n_fills", "name_score", "min_team_score", "dt_start",
-            "neutral", "n_legs"]
+            "neutral", "n_legs", "game_n_events", "game_n_goals", "feed_consistent"]
     pan = ev.merge(g[keep], on=["event_slug", "espn_path", "espn_id"], how="inner")
 
     all_codes = pd.concat([g.m_home, g.m_draw, g.m_away]).dropna().to_numpy()
@@ -942,6 +1002,7 @@ def build_panel(verbose: bool = True) -> pd.DataFrame:
         src = np.zeros(n, np.int8)            # 0 none, 1 fills.parquet, 2 Data-API backfill
         hz = {h: (np.full(n, np.nan, np.float32), np.full(n, np.nan, np.float32))
               for h in HORIZONS}
+        mz = {h: np.full(n, np.nan, np.float32) for h in PRE_OFFSETS}
         for k, idx in by_key.items():
             if isinstance(k, int):
                 sp, tag = series.get(k), 1
@@ -965,12 +1026,18 @@ def build_panel(verbose: bool = True) -> pd.DataFrame:
                 pa, la = hz[h]
                 pa[rows[ok2]] = px[ka[ok2]]
                 la[rows[ok2]] = (ts[ka[ok2]] - t[ok2]).astype(np.float32)
+            for h in PRE_OFFSETS:
+                kb = np.searchsorted(ts, t - h, side="right") - 1
+                ok3 = kb >= 0
+                mz[h][rows[ok3]] = px[kb[ok3]]
         cols[f"p_{leg}_pre"] = pre
         cols[f"age_{leg}_pre"] = age
         cols[f"n_{leg}_5m"] = n5
         cols[f"src_{leg}"] = src
         for h in HORIZONS:
             cols[f"p_{leg}_h{h}"], cols[f"lag_{leg}_h{h}"] = hz[h]
+        for h in PRE_OFFSETS:
+            cols[f"p_{leg}_m{h}"] = mz[h]
     pan = pd.concat([pan.reset_index(drop=True), pd.DataFrame(cols)], axis=1)
     pan["in_window"] = (pan.wallclock >= pan.game_start_ts - 7200) & \
                        (pan.wallclock <= pan.closed_ts.fillna(np.inf) + 3600)
@@ -979,6 +1046,32 @@ def build_panel(verbose: bool = True) -> pd.DataFrame:
     if verbose:
         print(f"panel.parquet: {len(pan):,} rows x {pan.shape[1]} cols -> {PANEL}")
     return pan
+
+
+# ------------------------------------------------------------------------------- loaders
+
+def games(columns=None) -> pd.DataFrame:
+    """One row per matched game (see module docstring)."""
+    return pd.read_parquet(GAMES, columns=columns)
+
+
+def events(columns=None) -> pd.DataFrame:
+    """One row per ESPN key event."""
+    return pd.read_parquet(EVENTS, columns=columns)
+
+
+def panel(columns=None, clean: bool = True) -> pd.DataFrame:
+    """The state x price panel.
+
+    `clean=True` keeps only rows from games whose ESPN feed is internally consistent
+    (`feed_consistent`: the number of goal events equals the goals in the final score, and
+    the feed has at least 5 events) and whose wallclock falls inside the trading window.
+    That filter uses no outcome information, so it is safe to apply before a backtest.
+    """
+    d = pd.read_parquet(PANEL, columns=columns)
+    if clean:
+        d = d[d.feed_consistent & d.in_window]
+    return d
 
 
 # ----------------------------------------------------------------------------- 6. validate
@@ -1022,8 +1115,6 @@ def validate(verbose: bool = True) -> dict:
     print("\n" + "=" * 78)
     print("MATCH QUALITY")
     print("=" * 78)
-    g = g.merge(regulation_scores(ev), on="event_slug", how="left")
-    g["reg_agrees"] = g.reg_result == g.pm_result
     dec = g[(g.pm_result != "") & g.reg_result.notna()]
     rep["result_agreement_ft"] = float(dec.result_agrees.mean())
     rep["result_agreement_regulation"] = float(dec.reg_agrees.mean())
@@ -1097,11 +1188,33 @@ def validate(verbose: bool = True) -> dict:
     print(f"sum of the three YES prices (should be ~1): median {bs.median():.3f}, "
           f"p10 {bs.quantile(.1):.3f}, p90 {bs.quantile(.9):.3f}")
 
+    print("\nGOAL LATENCY LADDER - cumulative median move of the scoring team's leg,"
+          "\nmeasured against its price 60 s before ESPN's wallclock:")
+    gl0 = pan[pan.kind.isin(["goal", "penalty_goal", "own_goal"]) & pan.in_window &
+              pan.scoring_side.isin(["home", "away"])]
+    ladder = ["m60", "m30", "m10", "pre", "h3", "h10", "h30", "h60", "h300"]
+    sel = np.where(gl0.scoring_side.to_numpy() == "home", 1, 0)
+    cols_l = {c: np.where(sel == 1, gl0[f"p_home_{c}"], gl0[f"p_away_{c}"]) for c in ladder}
+    okl = np.all([~pd.isna(cols_l[c]) for c in ladder], axis=0)
+    base = cols_l["m60"][okl]
+    for c in ladder:
+        d = cols_l[c][okl] - base
+        tag = {"pre": "  <- last print AT OR BEFORE the wallclock",
+               "h3": "  <- earliest execution-legal entry"}.get(c, "")
+        print(f"  {c:5s} median {np.median(d):+.4f}  mean {d.mean():+.4f}{tag}")
+    rep["goal_ladder_rows"] = int(okl.sum())
+    print(f"  (n={int(okl.sum()):,} goals with the whole ladder priced)")
+    print("  READ THIS: the market is already ~17% of the way through the move by the last "
+          "print\n  before ESPN's wallclock, and ~77% of it by +3 s.  ESPN's wallclock is "
+          "when its\n  operator typed the event, NOT when the ball crossed the line - do "
+          "not treat\n  p_*_pre as an uninformed pre-goal price.")
+
     print("\nprice reaction to a goal (median change in the scoring team's leg, "
           "pre -> +60s, rows with both prices):")
-    gl = pan[pan.kind.isin(["goal", "penalty_goal"]) & pan.in_window & pan.team_side.isin(["home", "away"])]
+    gl = pan[pan.kind.isin(["goal", "penalty_goal", "own_goal"]) & pan.in_window &
+             pan.scoring_side.isin(["home", "away"])]
     for side in ("home", "away"):
-        sub = gl[gl.team_side == side]
+        sub = gl[gl.scoring_side == side]
         a = sub[f"p_{side}_pre"]
         b = sub[f"p_{side}_h60"]
         m = a.notna() & b.notna()
@@ -1114,6 +1227,12 @@ def validate(verbose: bool = True) -> dict:
         m = a.notna() & b.notna()
         if m.sum():
             print(f"  {side} red card -> {side} leg: n={int(m.sum()):,}  median {(b-a)[m].median():+.3f}")
+
+    print("  draw leg on any goal at 0-0 -> 1-0: "
+          f"{(gl.loc[(gl.lead.abs()==1) & (gl.score_home+gl.score_away==1), 'p_draw_h60'] - gl.loc[(gl.lead.abs()==1) & (gl.score_home+gl.score_away==1), 'p_draw_pre']).median():+.3f}")
+    print(f"\nfeed_consistent games: {pan.groupby('event_slug').feed_consistent.first().mean():.2%}"
+          f"   rows kept by panel(clean=True): "
+          f"{(pan.feed_consistent & pan.in_window).mean():.2%}")
 
     print("\nspot checks (3 games with the biggest goal-driven move):")
     cand = gl[gl.p_home_pre.notna() & gl.p_home_h60.notna()].copy()
