@@ -29,9 +29,24 @@ def _jsonl(path):
         return [json.loads(line) for line in fh]
 
 
+def load_metadata(day: str) -> pd.DataFrame:
+    '''Load games metadata for a day, looking at previous days to recover cross-day captures.'''
+    dt = pd.to_datetime(day)
+    games = []
+    for i in reversed(range(3)):
+        d_str = (dt - pd.Timedelta(days=i)).strftime("%Y-%m-%d")
+        p = DATA_DIR / "live" / d_str / "games.jsonl"
+        if p.exists():
+            for r in _jsonl(p):
+                if "game" in r:
+                    games.append(r["game"])
+    return pd.DataFrame(games).drop_duplicates("condition_id", keep="last") if games else pd.DataFrame()
+
 def live_latency(day: str, min_move: float = 0.03) -> pd.DataFrame:
     d = DATA_DIR / "live" / day
-    games = pd.DataFrame([r["game"] for r in _jsonl(d / "games.jsonl")]).drop_duplicates("condition_id")
+    games = load_metadata(day)
+    if games.empty:
+        return pd.DataFrame()
     days = sorted({str(x)[:10] for x in games.event_date})
     sched = mlb_schedule(min(days), max(days), out=d / "schedule.parquet")
     sched = sched.assign(abstract_state="Final")         # match live games too
