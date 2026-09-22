@@ -209,3 +209,17 @@ def test_actual_common_build_preserves_legacy_ids_and_publishes_manifest(tmp_pat
     c.build()
     assert c.markets().set_index('condition_id').loc['z','m']==0
     assert set(c.fills().m)=={1}
+
+def test_api_empty_null_asset_schema_and_unknown_assets(tmp_path, monkeypatch):
+    import pyarrow.parquet as pq
+    monkeypatch.setattr(tapes,'TAPES',tmp_path)
+    u=pd.DataFrame([dict(condition_id='c',token_id=tok,outcome_idx=i,payout=float(i==0),
+                        game_start_ts=10,family='baseball',event_slug='g',fee_rate=.05)
+                    for i,tok in enumerate(['yes','no'])])
+    # This is the actual _fetch empty DataFrame schema, unlike a typed frame sliced to0rows.
+    pd.DataFrame([],columns=list(tapes.pm.TRADE_FIELDS)).to_parquet(tmp_path/'c.parquet',index=False)
+    assert str(pq.read_schema(tmp_path/'c.parquet').field('asset').type)=='null'
+    out=tapes.load_trades(u,legacy_mcat=['c'],legacy_wcat=['w'])
+    assert out.empty and out.condition_id.cat.categories.tolist()==['c']
+    pd.DataFrame([dict(timestamp=1,proxyWallet='w',side='BUY',outcomeIndex=0,price=.6,size=5,asset=None)]).to_parquet(tmp_path/'c.parquet')
+    assert tapes.load_trades(u,legacy_mcat=['c'],legacy_wcat=['w']).empty

@@ -151,6 +151,7 @@ def load_trades(u: pd.DataFrame, cids=None, legacy_mcat: list[str] = None, legac
     """All tapes as copyable 'bought side X at q' rows joined to outcomes."""
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
+    import pyarrow as pa
     files = sorted(TAPES.glob("*.parquet"))
     if cids is not None:
         cids = set(cids)
@@ -171,9 +172,10 @@ def load_trades(u: pd.DataFrame, cids=None, legacy_mcat: list[str] = None, legac
     for f in files:
         tb = pq.read_table(f, columns=["timestamp", "proxyWallet", "side", "outcomeIndex", "price", "size", "asset"])
         tk = tok_of.get(f.stem)
-        if tk is None:
+        if tb.num_rows == 0 or tk is None or not all(pd.notna(x) for x in tk):
             continue  # Unknown contract/token mapping cannot establish acquired side.
-        tb = tb.filter(pc.is_in(tb["asset"], value_set=__import__("pyarrow").array(list(tk))))
+        tb = tb.filter(pc.is_in(pc.cast(tb["asset"], pa.string()),
+                                value_set=pa.array(list(tk), type=pa.string())))
         if tb.num_rows == 0:
             continue
         de = pc.dictionary_encode(tb["proxyWallet"]).combine_chunks()
