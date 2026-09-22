@@ -67,11 +67,11 @@ def _rows(e: dict) -> list[dict]:
             prices = [float(p) for p in json.loads(m.get("outcomePrices") or "[]")]
         except (ValueError, TypeError):
             continue
-        if len(outcomes) != len(tokens) or len(prices) != len(tokens) or not tokens:
+        if len(outcomes) != len(tokens) or len(prices) != len(tokens) or len(tokens) != 2:
             continue
         resolved = m.get("umaResolutionStatus") == "resolved" or (
-            m.get("closed") and all(p in (0.0, 0.5, 1.0) for p in prices) and abs(sum(prices) - 1) < 1e-6)
-        if not resolved:
+            m.get("closed") and all(p in (0.0, 0.5, 1.0) for p in prices) and abs(sum(prices) - 1.0) < 1e-6)
+        if not resolved or not (all(p in (0.0, 0.5, 1.0) for p in prices) and abs(sum(prices) - 1.0) < 1e-6):
             continue
         mtype = m.get("sportsMarketType") or ("moneyline" if m.get("slug") == e.get("slug") else "other")
         start = parse_ts(m.get("gameStartTime")) or parse_ts(e.get("startTime"))
@@ -79,6 +79,7 @@ def _rows(e: dict) -> list[dict]:
         for i, (o, t, p) in enumerate(zip(outcomes, tokens, prices)):
             out.append({"token_id": t, "condition_id": m.get("conditionId"), "outcome": o, "outcome_idx": i,
                         "payout": p, "family": fam, "league": league, "market_type": mtype,
+                        "creation_ts": parse_ts(m.get("createdAt")),
                         "game_start_ts": start, "closed_ts": parse_ts(m.get("closedTime")),
                         "event_slug": e.get("slug"), "market_slug": m.get("slug"),
                         "volume": float(m.get("volumeNum") or 0), "neg_risk": bool(m.get("negRisk")),

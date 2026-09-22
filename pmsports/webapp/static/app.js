@@ -2,7 +2,7 @@
 (function () {
   var S = { index: [], tabs: [], tab: "all", slug: null, meta: null, q: "",
             period: "all", sport: "all", result: "all", tq: "", sort: "entry_ts", desc: false,
-            offset: 0, limit: 100, open: null, page: null };
+            offset: 0, limit: 100, open: null, page: null, strategyRequest: 0, tradeRequest: 0, equityRequest: 0, lastEquity: null };
   var $ = function (id) { return document.getElementById(id); };
   var api = function (p) { return fetch(p).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); };
   var pct = function (v, d) { return (v == null || isNaN(v)) ? "–" : (v >= 0 ? "+" : "") + (v * 100).toFixed(d == null ? 1 : d) + "%"; };
@@ -10,13 +10,13 @@
   var cents = function (v) { return (v == null || isNaN(v)) ? "–" : (v * 100).toFixed(1) + "¢"; };
   var sgn = function (v) { return v > 1e-7 ? "pos" : v < -1e-7 ? "neg" : "zero"; };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
+  var sportLabel = function (s) { return ({baseball: "Baseball", soccer: "Soccer", american_football: "Football", basketball: "Basketball", tennis: "Tennis", esports: "Esports", hockey: "Hockey", other: "Other"})[s] || s; };
   var when = function (ts) { if (!ts) return "–"; return new Date(ts * 1000).toISOString().replace("T", " ").slice(0, 16) + "Z"; };
   var vclass = function (v) { v = (v || "").toLowerCase(); return v.indexOf("profit") === 0 ? "profitable" : v.indexOf("promis") === 0 ? "promising" : v.indexOf("disput") === 0 ? "disputed" : "dead"; };
 
   function inTab(d) {
     if (S.tab === "all") return true;
     var c = d.sport_counts || {};
-    if (S.tab === "other") { return Object.keys(c).some(function (k) { return ["baseball", "soccer", "american_football", "basketball", "tennis", "esports", "hockey"].indexOf(k) < 0; }); }
     return (c[S.tab] || 0) > 0;
   }
 
@@ -28,7 +28,7 @@
     Array.prototype.forEach.call($("tabs").children, function (b) {
       b.onclick = function () {
         S.tab = b.dataset.k;
-        S.sport = (S.tab === "all" || S.tab === "other") ? "all" : S.tab;
+        S.sport = S.tab; S.offset = 0;
         renderTabs(); renderRail();
         var list = S.index.filter(inTab);
         if (list.length && !list.some(function (d) { return d.slug === S.slug; })) select(list[0].slug);
@@ -46,10 +46,10 @@
     });
     $("rail").innerHTML = order.map(function (g) {
       return '<section class="rail-group"><h3>' + esc(g || "Other") + "</h3>" + groups[g].map(function (d) {
-        var sp = (S.tab === "other" || S.tab === "all") ? "all" : S.tab;
-        var h = (d.kpis && d.kpis[sp]) ? d.kpis[sp] : (d.headline || {});
+        var sp = S.tab;
+        var h = (d.kpis && d.kpis[sp]) || {};
         var best = h.holdout || h.dev || {};
-        var n = S.tab === "all" ? d.n_total_trades : ((d.sport_counts || {})[S.tab] || d.n_total_trades);
+        var n = S.tab === "all" ? d.n_total_trades : ((d.sport_counts || {})[S.tab] || 0);
         return '<button class="item" data-slug="' + esc(d.slug) + '" aria-pressed="' + (d.slug === S.slug) + '">' +
           "<span>" + esc(d.title) + '</span><span class="chip ' + vclass(d.verdict) + '">' + esc(d.verdict) + "</span>" +
           '<span class="sub">' + (n || 0).toLocaleString() + " trades · " +
@@ -68,11 +68,15 @@
   }
 
   function loadStrategy(slug) {
+    var request = ++S.strategyRequest;
+    ++S.tradeRequest; ++S.equityRequest; S.page = null; S.lastEquity = null;
     $("main").innerHTML = '<div class="loading">Loading strategy…</div>';
-    var curSlug = slug;
     api("/api/strategy/" + slug).then(function (d) {
-      if (S.slug !== curSlug) return;
+      if (request !== S.strategyRequest || S.slug !== slug) return;
+      if (S.sport !== "all" && d.sports.indexOf(S.sport) < 0) S.sport = "all";
       S.meta = d; renderStrategy(); loadTrades();
+    }).catch(function (e) {
+      if (request === S.strategyRequest) $("main").innerHTML = '<div class="loading">Unable to load this ledger (API ' + esc(e.message) + '). See the index health diagnostics.</div>';
     });
   }
 
@@ -82,18 +86,30 @@
   }
 
   function loadTrades() {
-    var curSlug = S.slug;
+    var request = ++S.tradeRequest, eqRequest = ++S.equityRequest;
     var url = "/api/strategy/" + S.slug + "/trades" + qs() + "&offset=" + S.offset + "&limit=" + S.limit +
       "&sort=" + S.sort + "&desc=" + (S.desc ? "true" : "false");
-    api(url).then(function (p) { if (S.slug === curSlug) { S.page = p; renderTable(); } });
-    api("/api/strategy/" + S.slug + "/equity" + qs()).then(function(d) { if (S.slug === curSlug) drawChart(d); });
+    var eqUrl = "/api/strategy/" + S.slug + "/equity" + qs();
+    S.page = null; S.lastEquity = null; updateKPIs(); drawChart({points: []});
+    $("tb").innerHTML = '<tr><td colspan="11" class="loading">Loading trades…</td></tr>';
+    api(url).then(function (p) {
+      if (request !== S.tradeRequest) return;
+      S.page = p; updateKPIs(); renderTable();
+    }).catch(function (e) {
+      if (request === S.tradeRequest && $("tb")) $("tb").innerHTML = '<tr><td colspan="11" class="loading">Unable to load trades (API ' + esc(e.message) + ').</td></tr>';
+    });
+    api(eqUrl).then(function (d) {
+      if (eqRequest !== S.equityRequest) return;
+      S.lastEquity = d; drawChart(d);
+    }).catch(function (e) {
+      if (eqRequest === S.equityRequest && $("chartNote")) $("chartNote").textContent = 'Unable to load equity (API ' + e.message + ').';
+    });
   }
 
   function updateKPIs() {
     if (!$("kpisBox") || !S.meta) return;
-    var idxEntry = S.index.find(function(x) { return x.slug === S.slug; });
-    var sp = (S.sport === "all" || S.sport === "other") ? "all" : S.sport;
-    var kpis = (idxEntry && idxEntry.kpis && idxEntry.kpis[sp]) ? idxEntry.kpis[sp] : (S.meta.meta.headline || {});
+    var sp = S.sport;
+    var kpis = S.page ? S.page.kpis : {};
     var dev = kpis.dev, hold = kpis.holdout;
     $("kpisBox").innerHTML =
       kpi("Development" + (S.meta.meta.periods && S.meta.meta.periods.dev ? " · " + esc(S.meta.meta.periods.dev) : ""), dev, sp === "all") +
@@ -106,7 +122,7 @@
   function renderStrategy() {
     var m = S.meta.meta;
     var sportOpts = ['<option value="all">All</option>'].concat(S.meta.sports.map(function (s) {
-      return '<option value="' + esc(s) + '"' + (s === S.sport ? " selected" : "") + ">" + esc(s) + "</option>"; })).join("");
+      return '<option value="' + esc(s) + '"' + (s === S.sport ? " selected" : "") + ">" + esc(sportLabel(s)) + "</option>"; })).join("");
     $("main").innerHTML =
       '<section class="panel"><div class="pad">' +
       '<div style="display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center">' +
@@ -142,7 +158,9 @@
     $("fp").onchange = function () { S.period = this.value; S.offset = 0; loadTrades(); };
     $("fs").onchange = function () { S.sport = this.value; S.offset = 0; updateKPIs(); loadTrades(); };
     $("fr").onchange = function () { S.result = this.value; S.offset = 0; loadTrades(); };
-    var t; $("fq").oninput = function () { var v = this.value; clearTimeout(t); t = setTimeout(function () { S.tq = v; S.offset = 0; loadTrades(); }, 250); };
+    $("fr").value = S.result; $("fq").value = S.tq;
+    var renderedRequest = S.strategyRequest;
+    var t; $("fq").oninput = function () { var v = this.value; clearTimeout(t); t = setTimeout(function () { if (renderedRequest !== S.strategyRequest) return; S.tq = v; S.offset = 0; loadTrades(); }, 250); };
     $("prev").onclick = function () { S.offset = Math.max(0, S.offset - S.limit); S.open = null; loadTrades(); };
     $("next").onclick = function () { S.offset = S.offset + S.limit; S.open = null; loadTrades(); };
     Array.prototype.forEach.call(document.querySelectorAll("th[data-sort]"), function (h) {
@@ -237,7 +255,7 @@
   api("/api/index").then(function (d) {
     S.index = d.strategies; S.tabs = d.tabs;
     var trades = 0, dead = 0, prof = 0;
-    S.index.forEach(function (x) { trades += x.n_total_trades || 0; if (vclass(x.verdict) === "dead") dead++; if (vclass(x.verdict) === "profitable") prof++; });
+    S.index.forEach(function (x) { trades += x.n_total_trades || 0; if ((x.verdict || "").toLowerCase() === "dead") dead++; if (vclass(x.verdict) === "profitable") prof++; });
     document.getElementById("facts").innerHTML =
       '<div><b class="num">' + S.index.length + "</b>strategies</div>" +
       '<div><b class="num">' + trades.toLocaleString() + "</b>trades</div>" +
@@ -246,6 +264,6 @@
     renderTabs(); renderRail();
     if (S.index.length) select(S.index[0].slug);
     document.getElementById("find").oninput = function () { S.q = this.value; renderRail(); };
-    window.addEventListener("resize", function () { if (S.slug) api("/api/strategy/" + S.slug + "/equity" + qs()).then(drawChart); });
+    window.addEventListener("resize", function () { if (S.lastEquity) drawChart(S.lastEquity); });
   }).catch(function (e) { document.getElementById("main").innerHTML = '<div class="loading">API error: ' + e.message + "</div>"; });
 })();

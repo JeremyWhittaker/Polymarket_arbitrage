@@ -1,19 +1,15 @@
-"""Bet the pregame favorite in every game and hold to the final whistle: what do you make?
-
-python -m pmsports favorites  ->  reports/FAVORITES.md (+ CSV, chart)
-
-Pregame price = median of actual fills in the 10 minutes before the scheduled start
-(fallback: last 60 minutes), from the wallet tapes of every sports moneyline market with
->= $50k volume. Two-way markets (team A vs team B): the favorite is the side priced > 50c.
-Soccer "Will X win?" Yes/No markets (3-way with a draw): the favorite is the team whose
-"win" market is priced highest; the bet is Yes on it (a draw loses).
-
-Return per $1 staked = (payout - price - fee) / (price + fee), fee = taker fee at the
-market's own rate (0 in 2025, 3-5% in 2026) - or a fixed 5% "current" scenario.
+"""Pregame favorite audit with a fixed decision 10 minutes before scheduled start.
+Reference prices and liquidity use strictly earlier fills. Entry uses the first
+same-side taker print more than five seconds later, capped by its observed size.
+This is a partial-fill tape proxy, not a historical quote or guaranteed fill.
+Legacy data remains a bounded, eventual-volume-selected subset until backfilled.
 """
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -28,37 +24,75 @@ from ..wallets.universe import OUT
 log = logging.getLogger("pmsports")
 REPORTS = Path(__file__).resolve().parents[2] / "reports"
 PREGAME_MIN_USD = 25_000
+DECISION_LEAD = 600
+ENTRY_DELAY = 5
+TARGET_USD = 100.0
 
 
 def _pregame_p0(path: Path, start: float, tokens=None) -> tuple[float, float, float, int, float]:
-    """Pregame mid of outcome 0, plus the executable asks for outcome 0 and outcome 1.
+    r = _pregame_quote(path, start, tokens)
+    return tuple(r[k] for k in ("p0", "ask0", "ask1", "n_fills", "pre_usd"))
 
-    Mid = median implied price over all fills. Ask for outcome k = median price paid by
-    takers who *acquired* k (BUY k, or SELL the other side at p -> paid 1-p). Using the
-    mid alone overstates the cheap side's value when takers mostly buy the favorite.
-    """
+
+def _pregame_quote(path: Path, start: float, tokens=None) -> dict:
     tb = pq.read_table(path, columns=["timestamp", "side", "outcomeIndex", "price", "size", "asset"]).to_pandas()
-    if tb.empty:
-        return np.nan, np.nan, np.nan, 0, 0.0
+    tb = tb.sort_values("timestamp", kind="stable")
+    tb = tb[tb.price.between(0.001, 0.999) & tb["size"].gt(0) & tb.side.isin(["BUY", "SELL"])]
+    dec_time = start - DECISION_LEAD
     usd = (tb.price * tb["size"]).to_numpy()
-    pre_usd = float(usd[(tb.timestamp < start).to_numpy()].sum())
+    pre_usd = float(usd[(tb.timestamp < dec_time).to_numpy()].sum())
     buy = (tb.side == "BUY").to_numpy()
     oi = tb.outcomeIndex.to_numpy()
-    if tokens is not None:                      # token id is authoritative; outcomeIndex glitches
+    if tokens is not None:
         a = tb.asset.to_numpy()
-        oi = np.where(a == tokens[0], 0, np.where(a == tokens[1], 1, oi))
+        oi = np.where(a == tokens[0], 0, np.where(a == tokens[1], 1, -1))
     px = tb.price.to_numpy()
     p0 = np.where(oi == 0, px, 1 - px)
-    acq = np.where(buy, oi, 1 - oi)          # which outcome the taker ended up long
-    paid = np.where(buy, px, 1 - px)         # price paid for it
-    for win in (600, 3600):
-        m = ((tb.timestamp >= start - win) & (tb.timestamp < start)).to_numpy()
-        if m.sum() >= 3:
-            a0 = paid[m & (acq == 0)]
-            a1 = paid[m & (acq == 1)]
-            return (float(np.median(p0[m])), float(np.median(a0)) if len(a0) else np.nan,
-                    float(np.median(a1)) if len(a1) else np.nan, int(m.sum()), pre_usd)
-    return np.nan, np.nan, np.nan, 0, pre_usd
+    acq = np.where(buy, oi, 1 - oi)
+    paid = np.where(buy, px, 1 - px)
+
+    valid = np.isin(oi, [0, 1])
+    m_sig = ((tb.timestamp >= dec_time - 3600) & (tb.timestamp < dec_time)).to_numpy() & valid
+    m_ent = ((tb.timestamp > dec_time + ENTRY_DELAY) & (tb.timestamp < start)).to_numpy() & valid
+    signal_p0 = float(np.median(p0[m_sig])) if m_sig.sum() >= 3 else np.nan
+    r = {"p0": signal_p0, "n_fills": int(m_sig.sum()), "pre_usd": pre_usd,
+         "decision_ts": dec_time, "entry_delay_s": ENTRY_DELAY, "execution": "first_later_print_partial_proxy"}
+    for s in (0, 1):
+        ix = np.flatnonzero(m_ent & (acq == s))
+        i = ix[0] if len(ix) else None
+        r[f"ask{s}"] = float(paid[i]) if i is not None else np.nan
+        r[f"entry_ts{s}"] = float(tb.timestamp.iloc[i]) if i is not None else np.nan
+        r[f"entry_size{s}"] = float(tb["size"].iloc[i]) if i is not None else 0.0
+    return r
+
+
+def pregame_manifest():
+    files = [OUT / "universe.parquet"] + sorted(TAPES.glob("*.parquet"))
+    return {"version": 2, "decision_lead": DECISION_LEAD, "delay": ENTRY_DELAY,
+            "code_hash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "inputs": {str(p): [p.stat().st_size, p.stat().st_mtime_ns] for p in files if p.exists()}}
+
+
+def cached_pregame_prices(workers=16):
+    from ..collect import _write
+    path, mp = OUT / "pregame_prices.parquet", OUT / "pregame_prices.manifest.json"
+    wanted = pregame_manifest()
+    try:
+        old = json.loads(mp.read_text())
+        st = path.stat()
+        if old == {"request": wanted, "output": [st.st_size, st.st_mtime_ns]}:
+            return pd.read_parquet(path)
+    except (OSError, ValueError):
+        pass
+    result = pregame_prices(workers)
+    if wanted != pregame_manifest():
+        raise RuntimeError("pregame inputs changed during computation; retry after collection finishes")
+    _write(result, path)
+    st = path.stat()
+    tmp = mp.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"request": wanted, "output": [st.st_size, st.st_mtime_ns]}, sort_keys=True))
+    tmp.replace(mp)
+    return result
 
 
 def pregame_prices(workers: int = 16) -> pd.DataFrame:
@@ -70,11 +104,10 @@ def pregame_prices(workers: int = 16) -> pd.DataFrame:
     toks = u.pivot_table(index="condition_id", columns="outcome_idx", values="token_id", aggfunc="first")
     tok_of = {c: (a, b) for c, a, b in zip(toks.index, toks[0], toks[1])}
     with ThreadPoolExecutor(workers) as ex:
-        res = list(ex.map(lambda r: _pregame_p0(TAPES / f"{r.condition_id}.parquet", r.game_start_ts,
+        res = list(ex.map(lambda r: _pregame_quote(TAPES / f"{r.condition_id}.parquet", r.game_start_ts,
                                                 tok_of.get(r.condition_id)),
                           m.itertuples(index=False)))
-    m = m.assign(p0=[r[0] for r in res], ask0=[r[1] for r in res], ask1=[r[2] for r in res],
-                 n_fills=[r[3] for r in res], pre_usd=[r[4] for r in res])
+    m = pd.concat([m.reset_index(drop=True), pd.DataFrame(res)], axis=1)
     pay = u.pivot_table(index="condition_id", columns="outcome_idx", values="payout", aggfunc="first")
     outs = u.pivot_table(index="condition_id", columns="outcome_idx", values="outcome", aggfunc="first")
     m = m.join(pay.rename(columns={0: "y0", 1: "y1"})[["y0", "y1"]], on="condition_id")
@@ -90,17 +123,29 @@ def favorite_bets(m: pd.DataFrame) -> pd.DataFrame:
     two["fav_won"] = np.where(two.p0 >= 0.5, two.y0, two.y1)
     two["fav_ask"] = np.where(two.p0 >= 0.5, two.ask0, two.ask1)
     two["dog_ask"] = np.where(two.p0 >= 0.5, two.ask1, two.ask0)
+    for col in ("entry_size", "entry_ts"):
+        if f"{col}0" in two:
+            two[f"fav_{col}"] = np.where(two.p0 >= .5, two[f"{col}0"], two[f"{col}1"])
+            two[f"dog_{col}"] = np.where(two.p0 >= .5, two[f"{col}1"], two[f"{col}0"])
     two["kind"] = "two-way"
     # 3-way soccer: per event, the team-win market with the highest Yes price (skip draw markets)
     yn = m[yes_no & ~m.market_slug.str.contains("draw", case=False, na=False)].copy()
     yn = yn.sort_values("p0", ascending=False).drop_duplicates("event_slug")
     yn["fav_p"], yn["fav_won"], yn["kind"] = yn.p0, yn.y0, "3-way (draw loses)"
     yn["fav_ask"], yn["dog_ask"] = yn.ask0, np.nan
+    for col in ("entry_size", "entry_ts"):
+        if f"{col}0" in yn:
+            yn[f"fav_{col}"], yn[f"dog_{col}"] = yn[f"{col}0"], 0.0
     bets = pd.concat([two, yn], ignore_index=True)
     bets = bets[bets.fav_p.between(0.02, 0.99) & bets.fav_won.notna()]
     bets["date"] = pd.to_datetime(bets.game_start_ts, unit="s", utc=True)
     bets["season"] = bets.date.dt.year
-    return bets.sort_values("date")
+    for side in ("fav", "dog"):
+        price = bets[f"{side}_ask"]
+        size = bets.get(f"{side}_entry_size", pd.Series(0.0, index=bets.index))
+        unit_cost = price + taker_fee(1.0, price, bets.fee_rate.fillna(0))
+        bets[f"{side}_stake"] = np.minimum(TARGET_USD, size * unit_cost).fillna(0)
+    return bets.sort_values("date").drop_duplicates("event_slug")
 
 
 def returns(b: pd.DataFrame, price_col: str, won_col: str, fee: str | float, slip: float) -> np.ndarray:
@@ -125,10 +170,11 @@ def summarize(b: pd.DataFrame, by: str | None) -> pd.DataFrame:
         r0 = returns(g, "fav_p", "fav_won", 0.0, 0.0)
         ra = returns(g, "fav_p", "fav_won", "actual", 0.01)
         r5 = returns(g, "fav_p", "fav_won", 0.05, 0.01)
-        fa = g[g.fav_ask.notna()]
+        fa = g[g.fav_ask.notna() & g.fav_stake.gt(0)]
         rfa = returns(fa, "fav_ask", "fav_won", "actual", 0.0) if len(fa) else np.array([np.nan])
-        dog = g.assign(dog_won=np.where(g.kind == "two-way", 1 - g.fav_won, np.nan))
-        dog = dog[dog.dog_won.notna() & dog.dog_ask.notna()]
+        dog_all = g.assign(dog_won=np.where(g.kind == "two-way", 1 - g.fav_won, np.nan))
+        dog_all = dog_all[dog_all.dog_won.notna()]
+        dog = dog_all[dog_all.dog_ask.notna() & dog_all.dog_stake.gt(0)]
         rd = returns(dog, "dog_ask", "dog_won", "actual", 0.0) if len(dog) else np.array([np.nan])
         rows.append({by or "scope": key, "games": len(g), "avg_fav_price": g.fav_p.mean(),
                      "fav_win_rate": g.fav_won.mean(), "gap_win_minus_price": g.fav_won.mean() - g.fav_p.mean(),
@@ -136,8 +182,13 @@ def summarize(b: pd.DataFrame, by: str | None) -> pd.DataFrame:
                      "roi_actual_fee_1c": ra.mean(), "roi_5pct_fee_1c": r5.mean(), "roi_5pct_ci": _ci(r5),
                      "pnl_$100_per_game_actual_fee": 100 * ra.sum(),
                      "fav_roi_at_ask_actual_fee": np.nanmean(rfa),
+                     "fav_unfilled": len(g) - len(fa),
+                     "fav_proxy_stake_usd": fa.fav_stake.sum(),
+                     "fav_full_100_fills": int(fa.fav_stake.ge(TARGET_USD - 1e-6).sum()),
+                     "fav_partial_proxy_roi": float(np.average(rfa, weights=fa.fav_stake)) if len(fa) else np.nan,
                      "fav_at_ask_ci": _ci(rfa) if len(fa) >= 30 else "",
                      "underdog_roi_at_ask_actual_fee": np.nanmean(rd),
+                     "dog_unfilled": len(dog_all) - len(dog),
                      "underdog_at_ask_ci": _ci(rd) if len(dog) >= 30 else ""})
     return pd.DataFrame(rows)
 
@@ -169,17 +220,10 @@ def chart(b: pd.DataFrame, path: Path) -> None:
 
 def run() -> None:
     REPORTS.mkdir(exist_ok=True)
-    cache = OUT / "pregame_prices.parquet"
-    m = pd.read_parquet(cache) if cache.exists() else pregame_prices()
-    m.to_parquet(cache, index=False)
-    if "pre_usd" not in m.columns:            # older cache
-        m = pregame_prices()
-        m.to_parquet(cache, index=False)
+    m = cached_pregame_prices()
     full = favorite_bets(m)
-    # Headline sample is selected on PREGAME volume only. The tapes cover markets with >= $50k
-    # *total* volume, which includes in-play trading; upsets draw more in-play volume, so thin
-    # markets clear the cut more often when the underdog wins (look-ahead selection). Games with
-    # >= $25k traded before the start clear the cut regardless of outcome.
+    # This applies causal liquidity within the collected subset; it does not repair
+    # the old eventual-$50k collection floor or missing early tape history.
     b = full[full.pre_usd >= PREGAME_MIN_USD].copy()
     b["bucket"] = pd.cut(b.fav_p, [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.9, 1.0], include_lowest=True).astype(str)
     b.loc[b.kind != "two-way", "bucket"] = "3-way: " + b.loc[b.kind != "two-way", "bucket"]
@@ -199,28 +243,19 @@ def _md(df):
 
 
 def _render(b, t) -> str:
-    o = t["overall"].iloc[0]
-    L = ["# Bet every pregame favorite and hold to the end (all sports)", "",
-         f"{len(b):,} games, {b.date.min():%Y-%m-%d} to {b.date.max():%Y-%m-%d}: Polymarket sports moneylines "
-         f"with >= ${PREGAME_MIN_USD:,} of taker volume *before* the start (selection uses no post-start "
-         "information). Pregame price = median fill in the last 10 minutes before the start. "
-         "ROI is per $1 staked; `actual fee` = the market's own taker fee (0 in 2025, 3-5% in 2026) plus 1c "
-         "slippage; `5pct` = today's 5% sports fee on every game. `*_at_ask` columns price each bet at the "
-         "median price takers actually *paid* for that side in the last 10 minutes (executable), with the "
-         "actual fee and no extra slippage; the underdog columns are the mirror bet (two-way markets).", "",
-         f"**Headline:** favorites won **{o.fav_win_rate:.1%}** of games at an average price of "
-         f"**{o.avg_fav_price:.1%}**. Holding every favorite to the end returned **{o.roi_no_fee_no_slip:+.2%}** "
-         f"per $1 before costs and **{o.roi_actual_fee_1c:+.2%}** after the fees actually charged plus 1c "
-         f"(**{o.roi_5pct_fee_1c:+.2%}** at today's 5% fee). $100 on every game = "
-         f"**${o['pnl_$100_per_game_actual_fee']:,.0f}** total.", "",
-         "![cumulative](favorites_cumulative.png)", "", "## Overall", "", _md(t["overall"]), "",
-         "### Why not all 32k games? A selection trap", "",
-         "Selecting on *total* volume (>= $50k, which includes in-play trading) makes underdogs look "
-         "profitable, because upsets draw more in-play volume and thin markets clear the cut more often "
-         "when the underdog wins. The underdog edge on that sample grows with total volume (+2% at "
-         "$100-250k up to +22% at $5M+) and vanishes (-2% to -3%) once games are selected on pregame "
-         "volume only. Biased full sample, for reference:", "", _md(t["biased_full_sample"]), "",
-         "## By sport", "", _md(t["by_sport"]), "", "## By season", "", _md(t["by_season"]), "",
-         "## By how big a favorite (two-way markets)", "", _md(t["by_price"]), "",
-         "## Two-way vs three-way (soccer, draw loses)", "", _md(t["by_kind"]), ""]
-    return "\n".join(L)
+    lines = ["# Pregame favorite audit", "",
+             f"{len(b):,} eligible games within the collected subset. Decision: {DECISION_LEAD}s before "
+             f"scheduled start; liquidity >= ${PREGAME_MIN_USD:,} observed strictly before that decision. "
+             "Signal is the preceding hour's median normalized price (at least three prints).", "",
+             f"Entry: first same-side print strictly more than {ENTRY_DELAY}s after decision and before start. "
+             f"Available size caps each ${TARGET_USD:.0f} target, including fees. `fav_partial_proxy_roi` "
+             "weights returns by those capped stakes; unfilled signals remain in the counts. Tape prints "
+             "do not establish available order-book depth or a fill available to a follower. `ask` is a "
+             "legacy column name for this later-print proxy, not a historical quote.", "",
+             "The original corpus used an eventual $50k volume floor and bounded tape windows. A causal "
+             "$25k decision-time filter does not restore missing markets or history. Results are exploratory; "
+             "2026 has already been inspected. Signal-price and fixed-slippage columns are hypothetical "
+             "comparisons, not executable returns. The 5% scenario is a sensitivity, not a fee guarantee.", ""]
+    for name, table in t.items():
+        lines += [f"## {name.replace('_', ' ')}", "", _md(table) if len(table) else "No eligible sample.", ""]
+    return "\n".join(lines)

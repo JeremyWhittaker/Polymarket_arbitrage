@@ -46,8 +46,11 @@ def main() -> None:
     ll.add_argument("--day", required=True, help="UTC date folder under data/live/")
     sub.add_parser("universe")
     tp = sub.add_parser("tapes")
-    tp.add_argument("--min-volume", type=float, default=50000)
+    tp.add_argument("--min-volume", type=float, default=0,
+                    help="Retrospective eventual-volume floor; default 0 avoids this selection bias")
     tp.add_argument("--workers", type=int, default=12)
+    tp.add_argument("--max-markets", type=int, default=None)
+    tp.add_argument("--since", type=str, default=None)
     sub.add_parser("wallets-report")
     sub.add_parser("favorites")
     sub.add_parser("thresholds")
@@ -94,7 +97,8 @@ def main() -> None:
         from .wallets.tapes import fetch_tapes, select_markets
         from .wallets.universe import OUT
         u = pd.read_parquet(OUT / "universe.parquet")
-        fetch_tapes(select_markets(u, min_volume=a.min_volume).sample(frac=1, random_state=0), workers=a.workers)
+        fetch_tapes(select_markets(u, min_volume=a.min_volume, since=a.since or "2025-01-01").sample(frac=1, random_state=0),
+                    workers=a.workers, max_markets=a.max_markets, since=a.since)
     elif a.cmd == "wallets-report":
         from .wallets.report import run
         run()
