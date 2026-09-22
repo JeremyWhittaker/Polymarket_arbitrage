@@ -115,8 +115,6 @@ def run() -> None:
           f"average EV per $100 = ${e.ev_per_100usd.mean():.2f}")
 
 
-if __name__ == "__main__":
-    run()
 
 
 def ev_table(f: pd.DataFrame) -> pd.DataFrame:
@@ -142,3 +140,7 @@ def ev_table(f: pd.DataFrame) -> pd.DataFrame:
                      "ev_per_share_c": 100 * float(realized.mean()),
                      "ev_per_100usd": 100 * mm, "ci_lo": 100 * lo, "ci_hi": 100 * hi})
     return pd.DataFrame(rows)
+
+
+if __name__ == "__main__":
+    run()
