@@ -1,0 +1,145 @@
+[
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/analysis/favorites.py",
+    "line": 178,
+    "title": "Pregame screen does not remove future-volume selection",
+    "body": "The source tape universe needs 50k eventual volume, while downstream screening needs only 25k pregame. Pregame entries also use completed pregame totals.",
+    "evidence": "CLI default __main__.py:49 is 50000; tapes.py:30 filters total volume; calibration.py:44 uses completed pre_usd."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/wallets/study.py",
+    "line": 170,
+    "title": "Monthly wallet ranking includes later fills and unknown outcomes",
+    "body": "Full-tape positions are assigned their earliest fill time, then admitted as history by that time.",
+    "evidence": "Reproduction: Feb 1 selection includes a Feb 2 fill; cost 900.50 instead of 0.50. See PEER_REVIEW_EVIDENCE.json monthly_selection."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/analysis/calibration.py",
+    "line": 83,
+    "title": "Threshold entries reuse their signal print without executable capacity",
+    "body": "The first print triggering the rule is also priced as a 100 dollar entry. Later-copy proxies likewise lack reusable liquidity accounting.",
+    "evidence": "threshold_bets selects first matching fill and shares=STAKE/price; independent delayed whale check finds 83.1% of 248 first-event prints below 100 dollars."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/panel.py",
+    "line": 44,
+    "title": "Inning-ending plays create impossible duplicate states",
+    "body": "Third-out originals remain in the old half/inning and their outs become zero; correctly advanced checkpoint copies are also emitted.",
+    "evidence": "Synthetic reproduction emits top fifth zero outs and bottom fifth zero outs at the same third-out timestamp; see state_and_capture evidence."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/panel.py",
+    "line": 141,
+    "title": "State pricing incorporates a future window and subsequent plays",
+    "body": "The price median from 15 to 75 seconds after a state is treated as a trading reference without moving decision time or bounding by the next play.",
+    "evidence": "45,420/137,384 non-checkpoint rows with a next PA have its contact before the window end; H3 entry use at hypotheses.py:190."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/analysis/calibration.py",
+    "line": 422,
+    "title": "Rejecting dollar weighting conflates different trading policies",
+    "body": "One bet per market is incorrectly described as the only tradable weighting; causal capped proportional sizing is a different hypothesis.",
+    "evidence": "Source prose explicitly says only weighting that matters; first-per-event results differ from all-signal combined-band results in review evidence."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/wallets/report.py",
+    "line": 42,
+    "title": "Cache reuse ignores code, inputs and requested split",
+    "body": "Named pickle files are reused solely based on existence, allowing stale results after new data or parameter changes.",
+    "evidence": "families.pkl and walkforward.pkl names contain no split, window, code or data identity; cached returns before running fn."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/webapp/server.py",
+    "line": 70,
+    "title": "Persistent index hides new studies",
+    "body": "Existing index is trusted without checking newly written ledgers.",
+    "evidence": "GET health reports25 ledgers, GET index reports22; all3 football slugs absent while direct strategy GET returns200."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/research/LEDGER_SPEC.md",
+    "line": 60,
+    "title": "Sampled ledgers cannot fulfill every-trade walkthrough",
+    "body": "Four larger studies export only 20000 rows each; API pagination is over those samples.",
+    "evidence": "65,040/34,120/44,295/190,954 source trades become 20,000 rows each; verified index metadata."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/webapp/static/app.js",
+    "line": 86,
+    "title": "Sport-specific views retain global headline metrics",
+    "body": "Trade rows filter by sport but development and holdout cards always use meta.headline.",
+    "evidence": "favorite_at_90 holdout card all-sport -0.856%; football rows -1.145% on65 trades; renderStrategy reads unfiltered headline."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "requirements.txt",
+    "line": 1,
+    "title": "Documented clean install omits web dependencies",
+    "body": "FastAPI and Uvicorn are imported but absent from the requirements installed by the quick start.",
+    "evidence": "server.py:17 imports fastapi; webapp/__main__.py:7 imports uvicorn; neither is declared."
+  },
+  {
+    "severity": "important",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/wallets/tapes.py",
+    "line": 37,
+    "title": "All-fill claims omit trading earlier than 24 hours before start",
+    "body": "Collector window begins at game_start minus24h, truncating market and wallet history.",
+    "evidence": "Read-only API probes for UCL final, Belgium-Senegal and Seahawks-Patriots each returned3 valid fills48-24h before start outside requested collection window."
+  },
+  {
+    "severity": "critical",
+    "verdict": "confirmed",
+    "confidence": 0.99,
+    "author": "claude",
+    "file": "pmsports/analysis/live.py",
+    "line": 34,
+    "title": "UTC rollover capture fails without next-day game metadata",
+    "body": "Recorder only emits metadata for newly discovered tokens, while book and score sinks rotate daily; analyzer requires per-day metadata.",
+    "evidence": "Actual live-latency --day2026-09-19 exits1 FileNotFoundError games.jsonl despite approximately2GB clob file and score logs."
+  }
+]

@@ -21,6 +21,11 @@ subgraph, Polygonscan scraping and Selenium, and nothing new depends on them.
 
 Latest results: [`reports/REPORT.md`](reports/REPORT.md).
 
+Independent peer review (2026-09-22): [`reports/PEER_REVIEW.md`](reports/PEER_REVIEW.md)
+maps the original prompts to delivered work, identifies remaining data/execution defects,
+and rechecks the 74–75c whale signal. No executable edge is established; read the review's
+qualifications before relying on the historical conclusions below.
+
 ## MLB findings (2026-09-18: 4,664 games from 2025-26, baseline of 14.5k games from 2021-26)
 
 | Hypothesis | Result |

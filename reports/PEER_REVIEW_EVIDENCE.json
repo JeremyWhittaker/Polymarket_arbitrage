@@ -1,0 +1,676 @@
+{
+  "reviewed_commit": "4fe2138",
+  "monthly_selection": {
+    "selected_by_current_walk_forward": [
+      {
+        "cost": 900.5,
+        "pnl": 100.49999999999997,
+        "shares": 1001.0,
+        "n": 2
+      }
+    ],
+    "only_pre_boundary_fills": [
+      {
+        "cost": 0.5,
+        "pnl": 0.5,
+        "shares": 1.0,
+        "n": 1
+      }
+    ],
+    "note": "Even causal fill slicing must additionally require outcomes known by selection time."
+  },
+  "state_and_capture": {
+    "after_third_out": [
+      {
+        "inning": 5,
+        "half": "top",
+        "outs": 0,
+        "bases": 0,
+        "checkpoint": false,
+        "state_ts": 20.0
+      },
+      {
+        "inning": 5,
+        "half": "bottom",
+        "outs": 0,
+        "bases": 0,
+        "checkpoint": true,
+        "state_ts": 20.0
+      }
+    ],
+    "september_19_capture_files": [
+      "clob.jsonl",
+      "mlb.jsonl",
+      "sports.jsonl"
+    ],
+    "september_19_metadata_exists": false
+  },
+  "whales": {
+    "signals": 2728,
+    "events": 1108,
+    "signal_price_sensitivity": [
+      {
+        "rule": "all_signals",
+        "period": "dev",
+        "bets": 1128,
+        "events": 526,
+        "slip": 0.0,
+        "roi": 0.11203333877828289,
+        "ci_lo": 0.05184143005363857,
+        "ci_hi": 0.1672425492957515,
+        "price": 74
+      },
+      {
+        "rule": "all_signals",
+        "period": "dev",
+        "bets": 1128,
+        "events": 526,
+        "slip": 0.01,
+        "roi": 0.09733439535970129,
+        "ci_lo": 0.03793608620899115,
+        "ci_hi": 0.15182831017657358,
+        "price": 74
+      },
+      {
+        "rule": "all_signals",
+        "period": "holdout",
+        "bets": 326,
+        "events": 150,
+        "slip": 0.0,
+        "roi": 0.08636690282696388,
+        "ci_lo": -0.022020219320728892,
+        "ci_hi": 0.17211950355775643,
+        "price": 74
+      },
+      {
+        "rule": "all_signals",
+        "period": "holdout",
+        "bets": 326,
+        "events": 150,
+        "slip": 0.01,
+        "roi": 0.07233408106088732,
+        "ci_lo": -0.03464837901776274,
+        "ci_hi": 0.15699673935169473,
+        "price": 74
+      },
+      {
+        "rule": "first_per_event",
+        "period": "dev",
+        "bets": 526,
+        "events": 526,
+        "slip": 0.0,
+        "roi": 0.04806632310177805,
+        "ci_lo": 0.0018636897051550361,
+        "ci_hi": 0.09388308076357182,
+        "price": 74
+      },
+      {
+        "rule": "first_per_event",
+        "period": "dev",
+        "bets": 526,
+        "events": 526,
+        "slip": 0.01,
+        "roi": 0.034202204753660974,
+        "ci_lo": -0.01138758125618075,
+        "ci_hi": 0.07941726828804836,
+        "price": 74
+      },
+      {
+        "rule": "first_per_event",
+        "period": "holdout",
+        "bets": 150,
+        "events": 150,
+        "slip": 0.0,
+        "roi": 0.023687894739286897,
+        "ci_lo": -0.06526383773063793,
+        "ci_hi": 0.11262411952425638,
+        "price": 74
+      },
+      {
+        "rule": "first_per_event",
+        "period": "holdout",
+        "bets": 150,
+        "events": 150,
+        "slip": 0.01,
+        "roi": 0.010496947592706066,
+        "ci_lo": -0.0773141533865164,
+        "ci_hi": 0.0982928060684843,
+        "price": 74
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "dev",
+        "bets": 247,
+        "events": 247,
+        "slip": 0.0,
+        "roi": 0.030743409717339302,
+        "ci_lo": -0.04042338984979738,
+        "ci_hi": 0.10148644489904368,
+        "price": 74
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "dev",
+        "bets": 247,
+        "events": 247,
+        "slip": 0.01,
+        "roi": 0.01713213160620904,
+        "ci_lo": -0.053088831725136745,
+        "ci_hi": 0.08695029241384011,
+        "price": 74
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "holdout",
+        "bets": 85,
+        "events": 85,
+        "slip": 0.0,
+        "roi": -0.041617424049057605,
+        "ci_lo": -0.18239418085222112,
+        "ci_hi": 0.08460163806089761,
+        "price": 74
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "holdout",
+        "bets": 85,
+        "events": 85,
+        "slip": 0.01,
+        "roi": -0.0539722809866733,
+        "ci_lo": -0.19295262791349957,
+        "ci_hi": 0.07060254083378156,
+        "price": 74
+      },
+      {
+        "rule": "all_signals",
+        "period": "dev",
+        "bets": 1040,
+        "events": 513,
+        "slip": 0.0,
+        "roi": 0.06909786015174905,
+        "ci_lo": 0.0037186043867291395,
+        "ci_hi": 0.12555804958684239,
+        "price": 75
+      },
+      {
+        "rule": "all_signals",
+        "period": "dev",
+        "bets": 1040,
+        "events": 513,
+        "slip": 0.01,
+        "roi": 0.0551378181753998,
+        "ci_lo": -0.009398558390929646,
+        "ci_hi": 0.11086516038367696,
+        "price": 75
+      },
+      {
+        "rule": "all_signals",
+        "period": "holdout",
+        "bets": 245,
+        "events": 147,
+        "slip": 0.0,
+        "roi": 0.07735359895376277,
+        "ci_lo": -0.006277337130997438,
+        "ci_hi": 0.15368925550904336,
+        "price": 75
+      },
+      {
+        "rule": "all_signals",
+        "period": "holdout",
+        "bets": 245,
+        "events": 147,
+        "slip": 0.01,
+        "roi": 0.06361779630491594,
+        "ci_lo": -0.01895574314935039,
+        "ci_hi": 0.13899957352860484,
+        "price": 75
+      },
+      {
+        "rule": "first_per_event",
+        "period": "dev",
+        "bets": 513,
+        "events": 513,
+        "slip": 0.0,
+        "roi": 0.026669900120130235,
+        "ci_lo": -0.02248194244517401,
+        "ci_hi": 0.07641947352087608,
+        "price": 75
+      },
+      {
+        "rule": "first_per_event",
+        "period": "dev",
+        "bets": 513,
+        "events": 513,
+        "slip": 0.01,
+        "roi": 0.013264764907329963,
+        "ci_lo": -0.0352499548555038,
+        "ci_hi": 0.06235261599285184,
+        "price": 75
+      },
+      {
+        "rule": "first_per_event",
+        "period": "holdout",
+        "bets": 147,
+        "events": 147,
+        "slip": 0.0,
+        "roi": 0.013436507639650663,
+        "ci_lo": -0.07619918965855997,
+        "ci_hi": 0.1032340420434572,
+        "price": 75
+      },
+      {
+        "rule": "first_per_event",
+        "period": "holdout",
+        "bets": 147,
+        "events": 147,
+        "slip": 0.01,
+        "roi": 0.0005563674039357142,
+        "ci_lo": -0.08793948460468631,
+        "ci_hi": 0.08921531964782448,
+        "price": 75
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "dev",
+        "bets": 248,
+        "events": 248,
+        "slip": 0.0,
+        "roi": 0.05608611578700276,
+        "ci_lo": -0.008223517460670925,
+        "ci_hi": 0.12077296149432157,
+        "price": 75
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "dev",
+        "bets": 248,
+        "events": 248,
+        "slip": 0.01,
+        "roi": 0.042312438364961895,
+        "ci_lo": -0.021154681751567688,
+        "ci_hi": 0.10613891688384676,
+        "price": 75
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "holdout",
+        "bets": 69,
+        "events": 69,
+        "slip": 0.0,
+        "roi": -0.0062853731617688495,
+        "ci_lo": -0.14025826181641707,
+        "ci_hi": 0.1275440589718865,
+        "price": 75
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "holdout",
+        "bets": 69,
+        "events": 69,
+        "slip": 0.01,
+        "roi": -0.018915455772869627,
+        "ci_lo": -0.1511858041485718,
+        "ci_hi": 0.11322451588117116,
+        "price": 75
+      },
+      {
+        "rule": "all_signals",
+        "period": "dev",
+        "bets": 2167,
+        "events": 854,
+        "slip": 0.0,
+        "roi": 0.09132592954669884,
+        "ci_lo": 0.042570726604358185,
+        "ci_hi": 0.1362436478795813,
+        "price": "combined"
+      },
+      {
+        "rule": "all_signals",
+        "period": "dev",
+        "bets": 2167,
+        "events": 854,
+        "slip": 0.01,
+        "roi": 0.07698278247957466,
+        "ci_lo": 0.028871869959309106,
+        "ci_hi": 0.12131209047290187,
+        "price": "combined"
+      },
+      {
+        "rule": "all_signals",
+        "period": "holdout",
+        "bets": 561,
+        "events": 254,
+        "slip": 0.0,
+        "roi": 0.08518593689604162,
+        "ci_lo": 0.008819165001353076,
+        "ci_hi": 0.156833914488371,
+        "price": "combined"
+      },
+      {
+        "rule": "all_signals",
+        "period": "holdout",
+        "bets": 561,
+        "events": 254,
+        "slip": 0.01,
+        "roi": 0.07124734513471034,
+        "ci_lo": -0.0041244784018247705,
+        "ci_hi": 0.14198504837701645,
+        "price": "combined"
+      },
+      {
+        "rule": "first_per_event",
+        "period": "dev",
+        "bets": 854,
+        "events": 854,
+        "slip": 0.0,
+        "roi": 0.03392174238255367,
+        "ci_lo": -0.0035510941090424967,
+        "ci_hi": 0.07237799757281323,
+        "price": "combined"
+      },
+      {
+        "rule": "first_per_event",
+        "period": "dev",
+        "bets": 854,
+        "events": 854,
+        "slip": 0.01,
+        "roi": 0.020323207717217295,
+        "ci_lo": -0.016658545090309798,
+        "ci_hi": 0.05825637744361557,
+        "price": "combined"
+      },
+      {
+        "rule": "first_per_event",
+        "period": "holdout",
+        "bets": 254,
+        "events": 254,
+        "slip": 0.0,
+        "roi": 0.03964949026908679,
+        "ci_lo": -0.02848544062876251,
+        "ci_hi": 0.10228641804381315,
+        "price": "combined"
+      },
+      {
+        "rule": "first_per_event",
+        "period": "holdout",
+        "bets": 254,
+        "events": 254,
+        "slip": 0.01,
+        "roi": 0.02634467444137612,
+        "ci_lo": -0.040914703566225154,
+        "ci_hi": 0.08818034655637515,
+        "price": "combined"
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "dev",
+        "bets": 434,
+        "events": 434,
+        "slip": 0.0,
+        "roi": 0.039378929270326865,
+        "ci_lo": -0.012806223085312497,
+        "ci_hi": 0.09177140767804563,
+        "price": "combined"
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "dev",
+        "bets": 434,
+        "events": 434,
+        "slip": 0.01,
+        "roi": 0.025731825177577102,
+        "ci_lo": -0.025771804411641192,
+        "ci_hi": 0.07743593162654268,
+        "price": "combined"
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "holdout",
+        "bets": 131,
+        "events": 131,
+        "slip": 0.0,
+        "roi": 0.0030681028087001768,
+        "ci_lo": -0.09762619165718701,
+        "ci_hi": 0.10289463722646768,
+        "price": "combined"
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "period": "holdout",
+        "bets": 131,
+        "events": 131,
+        "slip": 0.01,
+        "roi": -0.009773023498438855,
+        "ci_lo": -0.10918813119515713,
+        "ci_hi": 0.08880075901650973,
+        "price": "combined"
+      }
+    ],
+    "delayed_other_wallet_prints": [
+      {
+        "rule": "all_signals",
+        "delay_s": 3,
+        "period": "dev",
+        "bets": 2127,
+        "unique_fills": 2033,
+        "events": 835,
+        "roi": 0.08776046457810276,
+        "ci_lo": 0.037704858293824674,
+        "ci_hi": 0.13374711736483774,
+        "fraction_prints_below_100usd": 0.7357780912082745
+      },
+      {
+        "rule": "all_signals",
+        "delay_s": 3,
+        "period": "holdout",
+        "bets": 550,
+        "unique_fills": 511,
+        "events": 249,
+        "roi": 0.09593470873722824,
+        "ci_lo": 0.023083805991638007,
+        "ci_hi": 0.16384885252916107,
+        "fraction_prints_below_100usd": 0.7872727272727272
+      },
+      {
+        "rule": "all_signals",
+        "delay_s": 10,
+        "period": "dev",
+        "bets": 2126,
+        "unique_fills": 2013,
+        "events": 835,
+        "roi": 0.08714952371364248,
+        "ci_lo": 0.036966497878558574,
+        "ci_hi": 0.13310482699391768,
+        "fraction_prints_below_100usd": 0.7342427093132643
+      },
+      {
+        "rule": "all_signals",
+        "delay_s": 10,
+        "period": "holdout",
+        "bets": 550,
+        "unique_fills": 502,
+        "events": 249,
+        "roi": 0.09476266532124007,
+        "ci_lo": 0.022191905980881898,
+        "ci_hi": 0.16269155127820034,
+        "fraction_prints_below_100usd": 0.7563636363636363
+      },
+      {
+        "rule": "all_signals",
+        "delay_s": 30,
+        "period": "dev",
+        "bets": 2120,
+        "unique_fills": 1977,
+        "events": 833,
+        "roi": 0.0857517685712764,
+        "ci_lo": 0.03909988422017919,
+        "ci_hi": 0.13089171148943315,
+        "fraction_prints_below_100usd": 0.7047169811320755
+      },
+      {
+        "rule": "all_signals",
+        "delay_s": 30,
+        "period": "holdout",
+        "bets": 548,
+        "unique_fills": 500,
+        "events": 249,
+        "roi": 0.10685051265013056,
+        "ci_lo": 0.03882467222114341,
+        "ci_hi": 0.17173867720485567,
+        "fraction_prints_below_100usd": 0.7773722627737226
+      },
+      {
+        "rule": "first_per_event",
+        "delay_s": 3,
+        "period": "dev",
+        "bets": 827,
+        "unique_fills": 827,
+        "events": 827,
+        "roi": 0.027288903468762088,
+        "ci_lo": -0.01101047958609721,
+        "ci_hi": 0.065659824321659,
+        "fraction_prints_below_100usd": 0.7654171704957679
+      },
+      {
+        "rule": "first_per_event",
+        "delay_s": 3,
+        "period": "holdout",
+        "bets": 248,
+        "unique_fills": 248,
+        "events": 248,
+        "roi": 0.03926615679266536,
+        "ci_lo": -0.032462431097980374,
+        "ci_hi": 0.10414944356268753,
+        "fraction_prints_below_100usd": 0.8306451612903226
+      },
+      {
+        "rule": "first_per_event",
+        "delay_s": 10,
+        "period": "dev",
+        "bets": 826,
+        "unique_fills": 826,
+        "events": 826,
+        "roi": 0.026879817004094576,
+        "ci_lo": -0.012747002809632424,
+        "ci_hi": 0.06539404411222853,
+        "fraction_prints_below_100usd": 0.7723970944309927
+      },
+      {
+        "rule": "first_per_event",
+        "delay_s": 10,
+        "period": "holdout",
+        "bets": 248,
+        "unique_fills": 248,
+        "events": 248,
+        "roi": 0.037660604097448765,
+        "ci_lo": -0.033329533679831276,
+        "ci_hi": 0.10267087499969045,
+        "fraction_prints_below_100usd": 0.7943548387096774
+      },
+      {
+        "rule": "first_per_event",
+        "delay_s": 30,
+        "period": "dev",
+        "bets": 821,
+        "unique_fills": 821,
+        "events": 821,
+        "roi": 0.02383461025812208,
+        "ci_lo": -0.015072029482689493,
+        "ci_hi": 0.06402596642698985,
+        "fraction_prints_below_100usd": 0.7515225334957369
+      },
+      {
+        "rule": "first_per_event",
+        "delay_s": 30,
+        "period": "holdout",
+        "bets": 247,
+        "unique_fills": 247,
+        "events": 247,
+        "roi": 0.042622221500537016,
+        "ci_lo": -0.024205717819605625,
+        "ci_hi": 0.10569495500588848,
+        "fraction_prints_below_100usd": 0.757085020242915
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "delay_s": 3,
+        "period": "dev",
+        "bets": 434,
+        "unique_fills": 434,
+        "events": 434,
+        "roi": 0.03668533633966162,
+        "ci_lo": -0.013998759500819816,
+        "ci_hi": 0.08910287117881073,
+        "fraction_prints_below_100usd": 0.7557603686635944
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "delay_s": 3,
+        "period": "holdout",
+        "bets": 130,
+        "unique_fills": 130,
+        "events": 130,
+        "roi": 0.006533859976929165,
+        "ci_lo": -0.09450844863905322,
+        "ci_hi": 0.10006695836210094,
+        "fraction_prints_below_100usd": 0.823076923076923
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "delay_s": 10,
+        "period": "dev",
+        "bets": 434,
+        "unique_fills": 434,
+        "events": 434,
+        "roi": 0.03568047662812953,
+        "ci_lo": -0.015938434643825505,
+        "ci_hi": 0.08831166105945155,
+        "fraction_prints_below_100usd": 0.771889400921659
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "delay_s": 10,
+        "period": "holdout",
+        "bets": 130,
+        "unique_fills": 130,
+        "events": 130,
+        "roi": 0.005171250952416877,
+        "ci_lo": -0.09454118711050372,
+        "ci_hi": 0.09818982227469399,
+        "fraction_prints_below_100usd": 0.7769230769230769
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "delay_s": 30,
+        "period": "dev",
+        "bets": 434,
+        "unique_fills": 434,
+        "events": 434,
+        "roi": 0.033480639769107076,
+        "ci_lo": -0.017807079065447224,
+        "ci_hi": 0.08488525417314174,
+        "fraction_prints_below_100usd": 0.7672811059907834
+      },
+      {
+        "rule": "inplay_pre50k_first_per_event",
+        "delay_s": 30,
+        "period": "holdout",
+        "bets": 130,
+        "unique_fills": 130,
+        "events": 130,
+        "roi": 0.007242530074048625,
+        "ci_lo": -0.09223399020512268,
+        "ci_hi": 0.10073531687824773,
+        "fraction_prints_below_100usd": 0.7615384615384615
+      }
+    ],
+    "limitations": [
+      "Already-seen holdout; exploratory and not multiple-test adjusted.",
+      "Print prices are proxies, not available quotes or proof of order fills.",
+      "First-per-event changes exposure; it does not refute every proportional sizing rule.",
+      "Full pregame volume is future information for pregame signals.",
+      "Sports order delay and signal receipt time are not reconstructed.",
+      "Signal bands reproduce the original +/-0.5c tests and can overlap at their boundary."
+    ]
+  }
+}
