@@ -106,7 +106,39 @@ def run() -> None:
     REPORTS.mkdir(exist_ok=True)
     t.to_csv(REPORTS / "whale_prices.csv", index=False)
     print(t.round(4).to_string(index=False))
+    e = ev_table(f)
+    e.to_csv(REPORTS / "expected_value_by_price.csv", index=False)
+    print("\nExpected value per price (one bet per game, after fees):")
+    print(e.round(3).to_string(index=False))
+    pos = e[(e.ev_per_100usd > 0) & (e.ci_lo > 0)]
+    print(f"prices with positive EV and a CI clear of zero: {pos.price_c.tolist() or 'none'}; "
+          f"average EV per $100 = ${e.ev_per_100usd.mean():.2f}")
 
 
 if __name__ == "__main__":
     run()
+
+
+def ev_table(f: pd.DataFrame) -> pd.DataFrame:
+    """Thorp-style expected value per price: EV = P(win)*$1 - (price + fee), one bet per game."""
+    q, y, fr, ev, m, ts = (f.q.to_numpy(), f.y.to_numpy(), f.fee_rate.to_numpy(),
+                           f.ev.to_numpy(), f.m.to_numpy(), f.ts.to_numpy())
+    pt = np.floor(q * 100).astype(int)
+    order = np.lexsort((ts, m))
+    rows = []
+    for c in range(50, 100):
+        sel = order[pt[order] == c]
+        if len(sel) < 200:
+            continue
+        _, firsts = np.unique(m[sel], return_index=True)     # earliest fill at that cent, per market
+        i = sel[firsts]
+        price = q[i]
+        fee = taker_fee(1.0, price, fr[i])
+        realized = y[i] - price - fee                        # EV per share, in dollars
+        roi = realized / (price + fee)
+        mm, lo, hi = cluster_ci(roi, ev[i])
+        rows.append({"price_c": c, "bets": len(i), "p_win": float(y[i].mean()),
+                     "cost_per_share": float((price + fee).mean()),
+                     "ev_per_share_c": 100 * float(realized.mean()),
+                     "ev_per_100usd": 100 * mm, "ci_lo": 100 * lo, "ci_hi": 100 * hi})
+    return pd.DataFrame(rows)
