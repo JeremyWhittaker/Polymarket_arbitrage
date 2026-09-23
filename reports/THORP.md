@@ -1,3 +1,5 @@
+> **Archived analysis — superseded by the September 2026 repair.** This report preserves Claude's original reasoning and review history. Its returns, “fresh holdout” descriptions, execution assurances and daily-profit projections are not accepted results. Use [the repair checklist](REPAIR_CHECKLIST.md), [corrected threshold results](THRESHOLDS.md), [original-rule esports rerun](research/esports_break_overreaction.md) and [execution limits](EXECUTION_PROTOCOL.md). The old $10–30/day estimate has no validated basis. No strategy here is approved for live trading.
+
 # Thorp program: 12 edge hypotheses on Polymarket sports, backtested and attacked
 
 *Written 2026-09-19. Development data runs up to 2026-06-30. The holdout is 2026-07-01 to about 2026-09-18, roughly
