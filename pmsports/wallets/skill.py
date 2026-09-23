@@ -284,32 +284,56 @@ class _WalletTapeReplay(TapeReplay):
                              for name, values in columns.items()}, copy=False)
 
 
-def build_groups(t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS) -> dict:
-    """Reusable complete-market index; raw positional identity preserves liquidity."""
+def build_groups(t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS,
+                 *, meta: pd.DataFrame | None = None) -> dict:
+    """Cached tape and small analytical-closure lookup; raw prints remain unchanged.
+
+    Gamma closure bounds new simulated entries. It is not an independently
+    observed resolution announcement or public receipt timestamp.
+    """
+    if meta is None or "closed_ts" not in meta:
+        raise ValueError("market closure metadata is required for wallet copy execution")
+    if not meta.index.is_unique:
+        raise ValueError("market closure metadata must have unique condition IDs")
+    closed = pd.to_numeric(meta.closed_ts.reindex(t.condition_id.cat.categories), errors="coerce").to_numpy(float, copy=True)
+    closed[~np.isfinite(closed) | (closed <= 0)] = np.nan
     return {"replay": _WalletTapeReplay(t, batch_rows=batch_rows), "wcat": t.proxyWallet.cat.categories,
-            "mcat": t.condition_id.cat.categories}
+            "mcat": t.condition_id.cat.categories, "closed_ts": closed}
 
 
 def copy_prices(t: pd.DataFrame, rows: pd.DataFrame, delays=(0, 5, 30, 60), horizon: float = 300.0,
-                groups: dict | None = None) -> pd.DataFrame:
+                groups: dict | None = None, *, meta: pd.DataFrame | None = None,
+                policies=("equal", "proportional")) -> pd.DataFrame:
     """Later other-wallet print proxies, with one-use shares and explicit no-fill metadata.
 
     Each delay and sizing policy is an independent strategy replay. Zero delay still
     requires a strictly later print: it is a latency sensitivity, not a same-print buy.
     Proportional policy is1% of observable leader notional, capped at$100/order/event.
+    Expiry is capped at known Gamma closure before allocation; unknown closure is
+    ineligible. This analytical cutoff does not measure public outcome receipt.
     """
+    policies = tuple(policies)
+    if not policies or len(set(policies)) != len(policies) or not set(policies) <= {"equal", "proportional"}:
+        raise ValueError("policies must contain unique equal and/or proportional names")
     out = rows.copy()
     extra = {}
-    gb = groups or build_groups(t)
+    gb = groups or build_groups(t, meta=meta)
+    if "closed_ts" not in gb:
+        raise ValueError("replay groups lack market closure metadata; rebuild the index")
     orders = pd.DataFrame({"m": gb["mcat"].get_indexer(rows.condition_id), "s": rows.side_idx.to_numpy(),
         "signal_ts": rows.timestamp.to_numpy(float), "leader_w": gb["wcat"].get_indexer(rows.proxyWallet),
         "event": rows.event_slug.to_numpy(), "y": rows.y.to_numpy(float)})
-    valid = valid_trade_mask(rows).to_numpy()
+    closed = np.full(len(rows), np.nan)
+    mapped = orders.m.to_numpy() >= 0
+    closed[mapped] = gb["closed_ts"][orders.m.to_numpy()[mapped]]
+    valid = valid_trade_mask(rows).to_numpy() & np.isfinite(closed) & (closed > 0)
     batches = {"batches": gb["replay"].order_batches(orders)} if isinstance(gb["replay"], _WalletTapeReplay) else {}
     for d in delays:
-        for name, budget in (("", np.full(len(rows), 100.)),
-                             ("prop_", np.minimum(100., .01 * rows["size"].to_numpy() * rows.q.to_numpy()))):
-            result = gb["replay"].replay(orders.assign(budget_usd=np.where(valid,budget,0.)), delay_s=d,
+        expiry = np.minimum(orders.signal_ts.to_numpy() + d + horizon, closed)
+        for policy in policies:
+            name = "" if policy == "equal" else "prop_"
+            budget = np.full(len(rows), 100.) if policy == "equal" else np.minimum(100., .01 * rows["size"].to_numpy() * rows.q.to_numpy())
+            result = gb["replay"].replay(orders.assign(budget_usd=np.where(valid,budget,0.), expiry_ts=expiry), delay_s=d,
                                         horizon_s=horizon, event_cap_usd=100., **batches)
             extra[f"{name}q_d{d}"] = result.entry_price.to_numpy()
             for col in ("signal_ts", "receipt_ts", "eligible_ts", "expiry_ts", "fill_ts", "print_id", "shares",

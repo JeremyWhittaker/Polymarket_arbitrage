@@ -314,3 +314,28 @@ def test_inning_grid_reconciliation_rejects_wrong_cash_or_first_signal_counts():
         led._reconcile_inning_rule(rows,{**good,'signals':1},'test')
     with pytest.raises(ValueError,match='capital_usd'):
         led._reconcile_inning_rule(rows,{**good,'capital_usd':100},'test')
+
+
+@pytest.mark.parametrize('closed_offset,filled',[(15.,True),(14.,False),(13.,False),(np.nan,False)])
+def test_wallet_ledger_censors_closure_before_allocation_and_only_replays_proportional(monkeypatch,tmp_path,closed_offset,filled):
+    from pmsports.wallets import skill,tapes,study
+    u=pd.DataFrame(dict(condition_id=['old','unsettled','new','missing'],
+        closed_ts=[led.SPLIT_TS-1,led.SPLIT_TS+1,led.SPLIT_TS+closed_offset,led.SPLIT_TS+100]))
+    monkeypatch.setattr(pd,'read_parquet',lambda *a,**kw:u)
+    monkeypatch.setattr(tapes,'load_trades',lambda universe:wallet_tape())
+    monkeypatch.setattr(skill,'fdr_survivors',lambda _:pd.Series(['leader']))
+    monkeypatch.setattr(study,'MIN_MKTS',1);monkeypatch.setattr(led,'OUT',tmp_path)
+    original=skill.copy_prices;calls=[]
+    def record(*args,**kw):
+        assert kw['meta'] is not None;calls.append(kw['policies']);return original(*args,**kw)
+    monkeypatch.setattr(skill,'copy_prices',record)
+    doc=led.copy_wallets_ledger(delay=3);d=frame(doc)
+    assert calls==[('proportional',)] and len(d)==2
+    assert bool(d.cost_usd.iloc[0]>0)==filled
+    assert 'analytical proxy' in ' '.join(doc['caveats'])
+    if filled:
+        assert d.entry_ts.iloc[0]<d.expiry_ts.iloc[0]==d.exit_ts.iloc[0]
+    else:
+        assert d.cost_usd.iloc[0]==d.shares.iloc[0]==d.pnl_usd.iloc[0]==0
+        assert d[['entry_ts','entry_price','exit_ts','exit_price']].iloc[0].isna().all()
+        assert d.exit_kind.iloc[0]=='unfilled'

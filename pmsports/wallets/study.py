@@ -30,8 +30,8 @@ DELAYS = (0, 5, 30, 60)
 
 
 def _causal_cutoff(t: pd.DataFrame, max_ts: float, meta: pd.DataFrame) -> pd.Series:
-    """Filter to fills that occurred before max_ts AND whose market resolution is known before max_ts.
-    Uses closed_ts as a conservative proxy for when the market outcome is publicly known.
+    """Filter to prior fills and prior Gamma closure for analytical outcome availability.
+    closed_ts is a proxy, not an independently recorded public resolution receipt.
     """
     if meta is None:
         raise ValueError("metadata is required for causal cutoffs (prevents outcome leakage)")
@@ -67,7 +67,8 @@ def selections(s1: pd.DataFrame, lb: pd.DataFrame | None) -> dict[str, list[str]
     return sel
 
 
-def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache: dict) -> dict:
+def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache: dict,
+             meta: pd.DataFrame | None = None) -> dict:
     ws = [w for w in wallets if w in s2.index]
     own = s2.loc[ws]
     out = {"selected": len(wallets), "active_p2": len(ws),
@@ -80,12 +81,13 @@ def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache:
     if key not in rows_cache:
         rows = t2[t2.proxyWallet.isin(ws)]
         if "_groups" not in rows_cache:
-            rows_cache["_groups"] = skill.build_groups(t2)
+            rows_cache["_groups"] = skill.build_groups(t2, meta=meta)
         summary = {}
         # Every signal is still replayed. Keep only one delay's audit in memory,
         # and retain small summaries across wallet selections rather than wide frames.
         for d in DELAYS:
-            copied = skill.copy_prices(t2, rows, delays=(d,), groups=rows_cache["_groups"])
+            policies = ("equal", "proportional") if d == 30 else ("equal",)
+            copied = skill.copy_prices(t2, rows, delays=(d,), groups=rows_cache["_groups"], policies=policies)
             c = skill.summarize_copy(skill.copy_returns(copied, d, stake="equal"))
             summary[f"copy_d{d}_roi"] = c["roi"]
             summary[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
@@ -146,7 +148,7 @@ def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str 
     cache: dict = {}
     table = []
     for name, ws in sel.items():
-        r = evaluate(t2, s2, ws, cache)
+        r = evaluate(t2, s2, ws, cache, meta=meta)
         p1 = s1.loc[[w for w in ws if w in s1.index]]
         r.update({"rule": name, "p1_roi": float(p1.pnl.sum() / p1.staked.sum()) if len(p1) else np.nan,
                   "p1_median_z": float(p1.z.median()) if len(p1) else np.nan})
@@ -164,16 +166,18 @@ def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str 
 
 # ----------------------------------------------------------------------------- more angles
 
-def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delays=(5, 30, 60)) -> pd.DataFrame:
+def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delays=(5, 30, 60),
+                     meta: pd.DataFrame | None = None) -> pd.DataFrame:
     """Copy every taker trade >= $X regardless of who placed it ("follow the whale money")."""
     usd = t2["size"] * t2.q
-    gb = skill.build_groups(t2)
+    gb = skill.build_groups(t2, meta=meta)
     rows = []
     for x in thresholds:
         sub = t2[usd >= x]
         if sub.empty:
             continue
-        cp = skill.copy_prices(t2, sub, delays=tuple(dict.fromkeys((0,) + tuple(delays) + (300,))), groups=gb)
+        cp = skill.copy_prices(t2, sub, delays=tuple(dict.fromkeys((0,) + tuple(delays) + (300,))),
+                               groups=gb, policies=("equal",))
         for phase, m in [("all", slice(None)), ("pregame", ~cp.in_play), ("in_play", cp.in_play)]:
             part = cp[m] if not isinstance(m, slice) else cp
             rec = {"min_usd": x, "phase": phase, "trades": len(part),
@@ -227,11 +231,11 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
             continue
         # These are independent policies, not orders in one combined portfolio.
         # Reuse the immutable tape index, resetting liquidity for each policy.
-        groups = skill.build_groups(nxt)
+        groups = skill.build_groups(nxt, meta=meta)
         for r in rules:
             if chosen[r].empty:
                 continue
-            part = skill.copy_prices(nxt, chosen[r], delays=tuple(delays), groups=groups)
+            part = skill.copy_prices(nxt, chosen[r], delays=tuple(delays), groups=groups, policies=("equal",))
             for d in delays:
                 rr = skill.copy_returns(part, d)
                 if rr.empty:
@@ -253,7 +257,7 @@ def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30), meta
     rows = t2[t2.proxyWallet.isin(fdr)]
     mk = t2[t2.condition_id.isin(rows.condition_id.unique())]
     rows = mk[mk.proxyWallet.isin(fdr)]
-    cp = skill.copy_prices(mk, rows, delays=delays)
+    cp = skill.copy_prices(mk, rows, delays=delays, meta=meta)
     out = []
     for phase, m in (("all", None), ("pregame", ~cp.in_play), ("in_play", cp.in_play)):
         part = cp if m is None else cp[m]

@@ -395,7 +395,7 @@ def copy_wallets_ledger(delay=30):
     t2 = t[t.timestamp >= SPLIT_TS]
     selected = t2[t2.proxyWallet.isin(fdr)]
     mk = t2[t2.condition_id.isin(selected.condition_id.unique())]
-    cp = skill.copy_prices(mk,selected,delays=(delay,))  # full selected signals, no sample/head cap
+    cp = skill.copy_prices(mk,selected,delays=(delay,),meta=meta,policies=("proportional",))  # all selected signals
     pref = "prop_"
     def col(name):
         return cp[f"{pref}{name}_d{delay}"]
@@ -417,8 +417,9 @@ def copy_wallets_ledger(delay=30):
         note="Causal FDR selection; proportional1% leader-notional target capped100/event; all no-fills retained; condition="+cp.condition_id.astype(str)))
     return _write(_meta("copy_skilled_wallets","Copy historically selected wallets: capped proportional policy",
         "pmsports/wallets/skill.py","reports/WALLETS.md",
-        f"Rank only trades and settled outcomes known before2026; FDR survivors with >={study.MIN_MKTS}markets; first later other-wallet same-side print strictly after{delay}s;1% leader notional capped100/order/event",
+        f"Rank prior trades using pre2026 Gamma closure as an outcome-availability proxy; FDR survivors with >={study.MIN_MKTS}markets; first later other-wallet same-side print strictly after{delay}s and before analytical closure;1% leader notional capped100/order/event",
         extra=("Whole2026 evaluation is one event-cap replay; monthly walk-forward has a different monthly reset scope",
+               "New entries expire at known Gamma closure; unknown closure is ineligible. Closure is an analytical proxy, not independently observed public resolution receipt",
                "All selected valid signals are retained; no comparison or ledger samples future events or rescales execution rows")),led)
 
 

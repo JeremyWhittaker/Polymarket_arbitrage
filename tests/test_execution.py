@@ -133,7 +133,8 @@ def test_wallet_copy_zero_delay_other_wallet_and_cash_capacity():
     t = tape().rename(columns={'m':'condition_id','s':'side_idx','ts':'timestamp','w':'proxyWallet'}).assign(y=1.,event_slug='g')
     for col in ('condition_id','proxyWallet'):
         t[col] = t[col].astype('category')
-    r = skill.copy_prices(t,t.iloc[[0,0]],delays=[0,3],horizon=7)
+    meta = pd.DataFrame({'closed_ts': 100.}, index=t.condition_id.cat.categories)
+    r = skill.copy_prices(t,t.iloc[[0,0]],delays=[0,3],horizon=7,meta=meta)
     assert r.q_d0.notna().all()
     assert r.fill_ts_d0.gt(r.timestamp).all()
     assert r.shares_d3.sum() == 3
