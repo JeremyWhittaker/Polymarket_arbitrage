@@ -3,7 +3,7 @@
 This project investigates sports-feed timing, state-based prices, favorite calibration,
 and copying informed wallets. It is a research tool; no real-money orders are placed.
 The recovered [baseball](reports/research/BASEBALL_CONTINUATION.md),
-[football](reports/research/football_wp_ladder.md) and
+[football](reports/research/fb-key-number-wp-step.md) and
 [received-book](reports/research/LIVE_EXECUTION.md) studies now use corrected cash and timing.
 
 **No executable trading edge has been established.** Repairs and reruns are in progress.
