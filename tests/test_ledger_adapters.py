@@ -246,3 +246,52 @@ def test_esports_loader_requires_original_round1_predictions(tmp_path,monkeypatc
     b['P_cal']=.9
     with pytest.raises(ValueError,match='round1'):
         esports.load()
+
+
+def test_inning_ten_cent_first_signal_is_not_filtered_three_cent_trade(monkeypatch):
+    p=panel_signals().copy()
+    p['game_pk']=[1,1]
+    p['fair_leader']=[.65,.75]
+    p['leader_is_home']=True
+    p['exec_home_p']=[.61,.71]
+    p['exec_home_ts']=[16.,36.]
+    p['exec_home_size']=[2.,3.]
+    p['exec_home_id']=[0.,1.]
+    monkeypatch.setattr(led,'_mlb_games',lambda:pd.DataFrame(dict(slug=['g1'],closed_ts=[90.]),index=[1]))
+    three=led._discount_signals(p,.03,first=True)
+    ten=led._discount_signals(p,.10,first=True)
+    assert three.decision_ts.tolist()==[10.]
+    assert ten.decision_ts.tolist()==[30.]
+    assert led._discount_signals(three,.10,first=True).empty
+    traded=led._mlb_rows(ten,ten.leader_is_home,'ten-cent rule')
+    assert traded.entry_ts.tolist()==[36.]
+    assert traded.entry_price.iloc[0]==pytest.approx(.72)
+    assert len(led._discount_signals(p,.03,first=False))==2
+
+
+def test_inning_grid_exports_all_fixed_rules_with_unique_names_and_no_fills(monkeypatch,tmp_path):
+    p=panel_signals().assign(diff=[1,-1],edge_home=[.12,-.12])
+    monkeypatch.setattr(led,'_mlb_checkpoints',lambda:p)
+    monkeypatch.setattr(led,'_adjusted_checkpoint_rows',lambda rows:rows)
+    monkeypatch.setattr(led,'_mlb_games',lambda:pd.DataFrame(dict(slug=['g1','g2'],closed_ts=[90.,100.]),index=[1,2]))
+    monkeypatch.setattr(led,'OUT',tmp_path)
+    alias=tmp_path/'mlb_inning_discount.json';alias.write_text('existing alias')
+    docs=led.mlb_inning_grid_ledgers()
+    assert len(docs)==22 and len({d['slug'] for d in docs})==22
+    assert alias.read_text()=='existing alias'
+    primary=next(d for d in docs if d['slug']=='mlb_inning_adjusted_08c_leader')
+    rows=frame(primary)
+    assert len(rows)==2 and rows.status.tolist()==['partial','unfilled']
+    assert rows.entry_ts.iloc[0]==16 and pd.isna(rows.entry_ts.iloc[1])
+    assert set(rows.period)=={'holdout'}
+    assert next(d for d in docs if d['slug']=='mlb_inning_adjusted_08c_trailer')['rows']==[]
+
+
+def test_inning_grid_reconciliation_rejects_wrong_cash_or_first_signal_counts():
+    rows=nofills(2)
+    good=dict(signals=2,n=0,unfilled=2,partial=0,capital_usd=0.,pnl_usd=0.)
+    assert led._reconcile_inning_rule(rows,good,'test')['signals']==2
+    with pytest.raises(ValueError,match='signals'):
+        led._reconcile_inning_rule(rows,{**good,'signals':1},'test')
+    with pytest.raises(ValueError,match='capital_usd'):
+        led._reconcile_inning_rule(rows,{**good,'capital_usd':100},'test')

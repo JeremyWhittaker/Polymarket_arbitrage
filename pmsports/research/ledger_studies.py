@@ -241,12 +241,121 @@ def _mlb_rows(sig,buy_home,note):
 
 def mlb_inning_discount_ledger(discount=.03):
     p = _mlb_checkpoints()
-    sig = p[p.fair_leader-p.price_leader >= discount].drop_duplicates("game_pk").copy()
+    sig = _discount_signals(p, discount, first=True)
     t = _mlb_rows(sig,sig.leader_is_home,"First half-inning signal; later same-side print plus1c sensitivity; optimistic retrospective state clock")
     return _write(_meta("mlb_inning_discount","MLB leader discount against prior-season state averages",
         "pmsports/analysis/thresholds.py","reports/THRESHOLDS.md",
         f"First half-inning signal per game with historical-minus-reference probability >={discount:.0%}; side-specific later print after5s plus1c;100 inclusive-dollar cap",
         sport="baseball",extra=("5s from retrospective state time is optimistic; pending-order cancellation is not established",)),t)
+
+
+def _discount_signals(checkpoints, discount, first):
+    """Select each rule's own first trigger, never filter another rule's ledger."""
+    selected = checkpoints[checkpoints.fair_leader-checkpoints.price_leader >= discount]
+    return (selected.drop_duplicates("game_pk") if first else selected).copy()
+
+
+def _adjusted_checkpoint_rows(checkpoints):
+    """The existing thresholds.inning_discounts adjusted fit, with identical inputs."""
+    import statsmodels.api as sm
+    from ..analysis.hypotheses import _features
+    p = checkpoints.copy()
+    p["we"], p["y"] = p.fair_home, p.home_won_final.astype(float)
+    model_ok = np.isfinite(_features(p)).all(axis=1) & p.pre_p.between(.02, .98)
+    model_rows = p.loc[model_ok]
+    tr = model_rows[model_rows.event_date < "2026-01-01"]
+    te = model_rows[model_rows.event_date >= "2026-01-01"].copy()
+    if len(tr) < 100 or te.empty:
+        raise ValueError(f"Adjusted inning grid cannot estimate: {len(tr)} training/{len(te)} evaluation rows")
+    X = _features(tr)
+    cols = [c for c in X if X[c].std() > 1e-9]
+    fit = sm.Logit(tr.y.to_numpy(), sm.add_constant(X[cols], has_constant="add")).fit(disp=0)
+    te["model_home"] = fit.predict(sm.add_constant(_features(te)[cols], has_constant="add"))
+    te["edge_home"] = te.model_home-te.mkt_p
+    return te
+
+
+def _adjusted_signals(evaluation, threshold, leading):
+    buy_home = (evaluation["diff"] > 0) == leading
+    edge = np.where(buy_home, evaluation.edge_home, -evaluation.edge_home)
+    selected = evaluation[edge >= threshold].drop_duplicates("game_pk").copy()
+    return selected, (selected["diff"] > 0) == leading
+
+
+def _reconcile_inning_rule(trades, expected, slug):
+    actual = dict(signals=len(trades), n=int(trades.cost_usd.gt(0).sum()),
+                  unfilled=int(trades.cost_usd.eq(0).sum()), partial=int(trades.status.eq("partial").sum()),
+                  capital_usd=float(trades.cost_usd.sum()), pnl_usd=float(trades.pnl_usd.sum()))
+    for key, value in actual.items():
+        if not np.isclose(value, float(expected[key]), rtol=1e-10, atol=1e-6):
+            raise ValueError(f"{slug}: accepted threshold report mismatch for {key}: {value} != {expected[key]}")
+    return actual
+
+
+def mlb_inning_grid_ledgers(verify_reports=None):
+    """Export all 22 EXISTING fixed rules; no extra thresholds or selected winners.
+
+    The default3c compatibility ledger remains available through
+    mlb_inning_discount_ledger. Every rule starts from the full checkpoint input;
+    a later10c first crossing cannot be recovered by filtering first3c trades.
+    Optional verification reconciles every row-count and cash total to an accepted
+    thresholds report before any grid ledger is published.
+    """
+    from pathlib import Path
+    from ..analysis.thresholds import DISCOUNTS
+    p = _mlb_checkpoints()
+    expected_rules = expected_adjusted = None
+    if verify_reports is not None:
+        directory = Path(verify_reports)
+        expected_rules = pd.read_csv(directory/"thresholds_inning_rules.csv")
+        expected_adjusted = pd.read_csv(directory/"thresholds_inning_adjusted.csv")
+    pending = []
+    for discount in DISCOUNTS:
+        cents = int(round(discount*100))
+        for first in (True, False):
+            policy = "first" if first else "every"
+            slug = f"mlb_inning_discount_{cents:02d}c_{policy}"
+            sig = _discount_signals(p, discount, first)
+            t = _mlb_rows(sig, sig.leader_is_home,
+                f"Fixed inning grid {discount:.0%} discount/{policy}; later same-side print plus1c; optimistic retrospective state clock")
+            mode = "first signal per game" if first else "every signal;100 inclusive-dollar event cap"
+            if expected_rules is not None:
+                expected = expected_rules[np.isclose(expected_rules.discount_at_least, discount)&expected_rules.bets.eq(mode)]
+                if len(expected) != 1:
+                    raise ValueError(f"Missing unique accepted rule: {slug}")
+                _reconcile_inning_rule(t, expected.iloc[0], slug)
+            meta = _meta(slug, f"MLB inning discount ≥{cents}c: {policy} signal{'s' if not first else '/game'}",
+                "pmsports/analysis/thresholds.py", "reports/THRESHOLDS.md",
+                f"{mode}; prior-season state expectancy minus causal reference >={discount:.0%}; first later side-specific print after5s plus1c;100 inclusive-dollar game cap",
+                sport="baseball", extra=("Existing declared threshold-grid row; not a new independent discovery",
+                    "Every-signal policy shares one game cap and source-print capacity; cash is not recycled",
+                    "5s from retrospective state time is optimistic; pending cancellation and actual receipt unobserved"))
+            pending.append((meta, t))
+    te = _adjusted_checkpoint_rows(p)
+    for threshold in DISCOUNTS[1:]:
+        cents = int(round(threshold*100))
+        for label, leading in (("leader", True), ("trailer", False)):
+            slug = f"mlb_inning_adjusted_{cents:02d}c_{label}"
+            sig, home = _adjusted_signals(te, threshold, leading)
+            t = _mlb_rows(sig, home,
+                f"Fixed adjusted inning grid {threshold:.0%}/{label}; fit before2026; later print plus1c; first signal/game")
+            t["period"] = "holdout"
+            if expected_adjusted is not None:
+                expected = expected_adjusted[np.isclose(expected_adjusted.model_edge_at_least, threshold)&expected_adjusted.buy.eq(label)]
+                if len(expected) != 1:
+                    raise ValueError(f"Missing unique accepted adjusted rule: {slug}")
+                _reconcile_inning_rule(t, expected.iloc[0], slug)
+            meta = _meta(slug, f"MLB adjusted inning model ≥{cents}c: {label}",
+                "pmsports/analysis/thresholds.py", "reports/THRESHOLDS.md",
+                f"Original pre2026 adjusted-state logistic fit; first {label} signal/game with edge>={threshold:.0%}; later print after5s plus1c;100 inclusive-dollar game cap",
+                sport="baseball", extra=("Existing declared adjusted-model grid row; evaluation is2026 only",
+                    "Prior-season baseline and pregame strength enter the fixed model; no threshold refit",
+                    "Retrospective state clock and next-state expiry do not prove live receipt or cancellation"))
+            pending.append((meta, t))
+    # Validate the whole grid before publication; shared _document/_rows are unchanged.
+    for _, t in pending:
+        validate_cash(t)
+    return [_write(meta, t) for meta, t in pending]
 
 
 def mlb_fair_value_ledger(threshold=.02):
@@ -317,9 +426,18 @@ def run():
     favorites_ledger("underdog")
     mlb_favorites_ledger()
     mlb_inning_discount_ledger()
+    mlb_inning_grid_ledgers()
     mlb_fair_value_ledger()
     copy_wallets_ledger()
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--inning-grid", action="store_true", help="Export only the existing22 inning rules")
+    parser.add_argument("--verify-reports", help="Accepted thresholds CSV directory for exact grid reconciliation")
+    args = parser.parse_args()
+    if args.inning_grid:
+        mlb_inning_grid_ledgers(args.verify_reports)
+    else:
+        run()

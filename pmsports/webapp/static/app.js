@@ -214,7 +214,7 @@
       return row + '<tr class="detail"><td colspan="11"><div class="walk">' +
         "<div><h4>Signal</h4><p>" + esc(r[c.note] || "—") + "</p>" + (codes ? '<p class="muted">Source IDs: ' + codes + '</p>' : '') + "</div>" +
         '<div><h4>Entered</h4><p class="big">' + cents(r[c.entry_price]) + " per share</p><p>" + when(r[c.entry_ts]) +
-        " · " + usd(r[c.stake_usd]) + " = " + shares + " shares" + (r[c.fee_usd] ? " · fee " + usd(r[c.fee_usd]) : " · no taker fee") + "</p></div>" +
+        " · " + usd(r[c.stake_usd]) + " = " + shares + " shares" + (r[c.fee_usd] ? " · total fees " + usd(r[c.fee_usd]) : " · no taker fee") + "</p></div>" +
         '<div><h4>Exited</h4><p class="big">' + esc(r[c.exit_kind]) + " at " + cents(r[c.exit_price]) + "</p><p>" +
         when(r[c.exit_ts]) + " · returned " + usd(r[c.payout]) + "</p></div>" +
         '<div><h4>Result</h4><p class="big ' + sgn(r[c.pnl_usd]) + '">' + usd(r[c.pnl_usd]) + " · " + pct(r[c.roi_deployed]) + "</p><p>" +
@@ -251,7 +251,7 @@
     g.strokeStyle = ink3; g.globalAlpha = .85; g.beginPath(); g.moveTo(padL, Y(0)); g.lineTo(W - padR, Y(0)); g.stroke(); g.globalAlpha = 1;
     if (d.holdout_at != null && d.holdout_at > 0) {
       var hx = X(d.holdout_at); g.strokeStyle = accent; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(hx, padT); g.lineTo(hx, H - padB); g.stroke(); g.setLineDash([]);
-      g.fillStyle = accent; g.textAlign = "left"; g.fillText("holdout →", hx + 5, padT + 10);
+      g.fillStyle = accent; g.textAlign = "left"; g.fillText("evaluation →", hx + 5, padT + 10);
     }
     g.lineWidth = 2; g.strokeStyle = ys[ys.length - 1] >= 0 ? good : bad; g.beginPath();
     pts.forEach(function (p, i) { var x = X(p[0]), y = Y(p[1]); if (i === 0) g.moveTo(x, y); else g.lineTo(x, y); });
