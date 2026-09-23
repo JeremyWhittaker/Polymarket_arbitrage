@@ -19,8 +19,15 @@ def metadata():
 
 
 def tape(rows):
-    return pd.DataFrame([dict(m=m,s=s,ts=ts,q=q,size=size,fee_rate=.05,print_id=str(i))
-                         for i,(m,s,ts,q,size) in enumerate(rows)])
+    out=[]
+    for i,row in enumerate(rows):
+        m,s,ts,q,size,*tail=row
+        action=tail[0] if tail else "BUY"
+        native=s if action=="BUY" else 1-s
+        out.append(dict(m=m,s=s,ts=ts,q=q,size=size,fee_rate=.05,print_id=str(i),
+                        raw_action=action,raw_token_side=native,raw_asset=m+("y" if native==0 else "n"),
+                        raw_price=q if action=="BUY" else 1-q))
+    return pd.DataFrame(out)
 
 
 def game(events=None, rows=None, meta=None):
@@ -122,7 +129,7 @@ def pair_orders():
 
 
 def test_failed_hedge_unwinds_actual_size_and_settles_residual_cash():
-    g=game(rows=[("h",0,104,.4,10), ("h",1,124,.7,4)])
+    g=game(rows=[("h",0,104,.4,10), ("h",1,124,.7,4,"SELL")])
     r=S.execute(g,pair_orders())
     home=r[r.leg.eq("home")].iloc[0]
     assert home.shares==10 and home.sold_shares==4 and home.residual_shares==6
@@ -135,7 +142,7 @@ def test_failed_hedge_unwinds_actual_size_and_settles_residual_cash():
 
 
 def test_pair_quantities_fixed_before_future_sizes_and_stress_on_sale():
-    g=game(rows=[("h",0,104,.4,10),("a",0,104,.4,2),("h",1,124,.7,4),("a",1,124,.5,1)])
+    g=game(rows=[("h",0,104,.4,10),("a",0,104,.4,2),("h",1,124,.7,4,"SELL"),("a",1,124,.5,1,"SELL")])
     r=S.execute(g,pair_orders(),.01)
     assert r.target_shares.tolist()==[10,10]
     assert r.shares.tolist()==[10,2]
@@ -145,7 +152,7 @@ def test_pair_quantities_fixed_before_future_sizes_and_stress_on_sale():
 
 
 def test_complete_pair_held_no_unwind():
-    g=game(rows=[("h",0,104,.4,10),("a",0,104,.4,10),("h",1,124,.7,4)])
+    g=game(rows=[("h",0,104,.4,10),("a",0,104,.4,10),("h",1,124,.7,4,"SELL")])
     r=S.execute(g,pair_orders())
     assert r.hedge_status.eq("complete").all()
     assert r.sold_shares.sum()==0
@@ -153,7 +160,7 @@ def test_complete_pair_held_no_unwind():
 
 
 def test_full_unwind_uses_actual_exit_clock_and_no_fill_has_no_exit():
-    g=game(rows=[("h",0,104,.4,10),("h",1,124,.7,10)])
+    g=game(rows=[("h",0,104,.4,10),("h",1,124,.7,10,"SELL")])
     r=S.execute(g,pair_orders())
     home=r[r.leg.eq("home")].iloc[0]
     away=r[r.leg.eq("away")].iloc[0]
@@ -165,7 +172,7 @@ def test_full_unwind_uses_actual_exit_clock_and_no_fill_has_no_exit():
 
 
 def test_partial_unwind_retains_settlement_clock():
-    g=game(rows=[("h",0,104,.4,10),("h",1,124,.7,4)])
+    g=game(rows=[("h",0,104,.4,10),("h",1,124,.7,4,"SELL")])
     r=S.execute(g,pair_orders())
     home=r[r.leg.eq("home")].iloc[0]
     assert home.exit_fill_ts==124
@@ -174,7 +181,7 @@ def test_partial_unwind_retains_settlement_clock():
 
 
 def test_multiple_pairs_share_exit_capacity():
-    g=game(rows=[("h",0,104,.4,20),("h",1,124,.7,5)])
+    g=game(rows=[("h",0,104,.4,20),("h",1,124,.7,5,"SELL")])
     o=pair_orders(); second=o.copy(); second.signal_id="pair2"
     r=S.execute(g,pd.concat([o,second],ignore_index=True))
     assert r.shares.sum()==20
@@ -262,3 +269,85 @@ def test_empty_ledger_has_complete_cash_schema():
     from pmsports.research.ledger_studies import _document
     doc=_document({"slug":"empty"},t)
     assert doc["rows"]==[] and doc["headline"]=={} and doc["n_total_trades"]==0
+
+
+def test_sell_complement_stays_reference_but_cannot_fill_primary_buy():
+    rows=[("h",0,390,.3,100,"SELL"),("d",0,390,.25,100,"SELL"),
+          ("a",0,390,.45,100,"SELL"),("a",0,404,.25,1000,"SELL"),
+          ("a",0,405,.3,7,"BUY")]
+    g=game(rows=rows)
+    a,o=S.make_signals(g,config("card"))
+    assert a.selected.tolist()==[True]
+    assert a.reference_away.tolist()==[.45]
+    r=S.execute(g,o)
+    assert r.entry_ts.tolist()==[405]
+    assert r.shares.tolist()==[7]
+    assert r.entry_raw_action.tolist()==["BUY"]
+    assert r.entry_raw_token_side.tolist()==[0]
+    assert r.entry_raw_asset.tolist()==["ay"]
+    assert r.entry_raw_price.tolist()==[.3]
+    assert r.action_policy.tolist()==[S.ACTION_POLICY]
+
+
+def test_sell_no_cannot_trigger_dutch_buy_yes_observations():
+    rows=[(m,0,104+i,.2,100,"SELL") for i,m in enumerate(("h","d","a"))]
+    g=game([event(kind="goal")],rows)
+    a,o=S.make_signals(g,config("dutch"))
+    assert not a.selected.any() and o.empty
+    assert a.reason.tolist()==["missing_three_acquired_side_observations"]
+
+
+def test_no_mirror_uses_actual_buy_no_not_sell_yes():
+    rows=[(m,1,104+i,.3,100,"SELL") for i,m in enumerate(("h","d","a"))]
+    g=game([event(kind="goal")],rows)
+    a,o=S.make_signals(g,config("dutch","no_mirror"))
+    assert not a.selected.any() and o.empty
+    rows += [(m,1,110+i,.3,100,"BUY") for i,m in enumerate(("h","d","a"))]
+    g=game([event(kind="goal")],rows)
+    a,o=S.make_signals(g,config("dutch","no_mirror"))
+    assert a.selected.tolist()==[True]
+    assert o.signal_ts.tolist()==[112]*3 and o.s.tolist()==[1]*3
+
+
+def test_opposite_buy_cannot_close_held_token_but_later_sell_can():
+    g=game(rows=[("h",0,104,.4,10,"BUY"),("h",1,124,.7,100,"BUY"),
+                 ("h",1,125,.65,3,"SELL")])
+    r=S.execute(g,pair_orders())
+    home=r[r.leg.eq("home")].iloc[0]
+    assert home.sold_shares==3 and home.residual_shares==7
+    assert home.exit_fill_ts==125 and home.sale_proceeds==pytest.approx(3*.35)
+    assert home.exit_raw_action=="SELL" and home.exit_raw_token_side==0
+    assert home.exit_raw_asset=="hy" and home.exit_raw_price==pytest.approx(.35)
+
+
+def test_missing_literal_action_cannot_supply_entry_or_unwind():
+    t=tape([("h",0,104,.4,10),("h",1,124,.7,10,"SELL")]).drop(columns=list(S.RAW_PROVENANCE))
+    g=S.GameData(pd.DataFrame([event()]),metadata(),t)
+    r=S.execute(g,pair_orders())
+    assert r.shares.sum()==0 and r.sold_shares.sum()==0
+    assert len(g.replay.tape)==0 and len(g.sell_replay.tape)==0
+
+
+def test_same_clock_sell_capacity_cannot_transfer_to_tiny_actual_buy():
+    # Real raw-audit shape: SELL-No and BUY-Yes share time/price, but not capacity.
+    rows=[("h",0,390,.3,100),("d",0,390,.25,100),("a",0,390,.45,100),
+          ("a",0,404,.25,1000,"SELL"),("a",0,404,.25,6.8,"BUY")]
+    g=game(rows=rows)
+    _,o=S.make_signals(g,config("card"))
+    r=S.execute(g,o)
+    assert r.shares.tolist()==[6.8]
+    assert r.cost_usd.iloc[0]==pytest.approx(6.8*(.25+.05*.25*.75))
+    assert r.print_id.tolist()==["4"]
+
+
+def test_no_position_entry_and_unwind_preserve_native_no_token():
+    g=game(rows=[("h",1,104,.4,10,"BUY"),("h",0,124,.7,100,"BUY"),
+                 ("h",0,125,.65,3,"SELL")])
+    orders=pair_orders();orders["s"]=1;orders["y"]=1-orders.y
+    r=S.execute(g,orders)
+    home=r[r.leg.eq("home")].iloc[0]
+    assert home.shares==10 and home.sold_shares==3 and home.residual_shares==7
+    assert home.entry_raw_action=="BUY" and home.entry_raw_token_side==1
+    assert home.exit_raw_action=="SELL" and home.exit_raw_token_side==1
+    assert home.entry_raw_asset==home.exit_raw_asset=="hn"
+    assert home.sale_proceeds==pytest.approx(3*.35)

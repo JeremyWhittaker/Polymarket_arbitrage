@@ -1,5 +1,7 @@
 # Five soccer hypotheses: causal continuation
 
+**Literal-action correction pending rerun:** The tables below retain the earlier economic-acquisition proxy results. That version allowed SELL-complement prints to supply BUY-entry capacity. The repaired protocol requires an actual BUY of the intended native token and actual SELL of held tokens for unwind. These archived-comparison figures must not be described as the corrected literal-BUY results; a complete 38-configuration rerun is required.
+
 **No executable edge is established.** These are historically explored transaction proxies. The atomic three-book/depth claim is blocked by absent soccer order books; no historical public-feed receipt clocks were captured.
 
 Run: 4739 games, 106519 events; full local panel. Development precedes July 1, 2026; the later period was already inspected and is exploratory, not fresh confirmation.

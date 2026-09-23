@@ -31,6 +31,8 @@ EXTRAS = C.DATA / "events/soccer/extra_fills"
 SPLIT = pd.Timestamp("2026-07-01", tz="UTC").timestamp()
 LEGS = ("home", "draw", "away")
 GOALS = {"goal", "penalty_goal", "own_goal"}
+ACTION_POLICY = "soccer-direct-buy-sell-v2"
+RAW_PROVENANCE = ("raw_action", "raw_token_side", "raw_asset", "raw_price")
 SLUGS = {"card": "soccer-red-card-timescale", "dutch": "soccer-3way-goal-dutchbook",
          "sub": "soccer-injury-sub-shock", "anchor": "soccer-draw-anchor-basis",
          "leader": "soccer-added-time-leader"}
@@ -39,7 +41,8 @@ TITLES = {"card": "Red-card timescale", "dutch": "Post-goal three-book dutch boo
           "leader": "Added-time leader"}
 EMPTY_TAPE = dict(m=pd.Series(dtype=str), s=pd.Series(dtype=int), ts=pd.Series(dtype=float),
                   q=pd.Series(dtype=float), size=pd.Series(dtype=float), fee_rate=pd.Series(dtype=float),
-                  print_id=pd.Series(dtype=str))
+                  print_id=pd.Series(dtype=str), raw_action=pd.Series(dtype=str),
+                  raw_token_side=pd.Series(dtype=int), raw_asset=pd.Series(dtype=str), raw_price=pd.Series(dtype=float))
 
 
 def clean(x):
@@ -57,7 +60,12 @@ def true_minute(minute, display):
 
 
 def normalize_raw(raw, cid, meta):
-    """Token identity, not the API's occasionally wrong outcomeIndex, identifies the leg."""
+    """Preserve literal action/token alongside the economic acquisition normalization.
+
+    Token identity, not the API's occasionally wrong outcomeIndex, identifies the
+    native outcome. SELL complements are useful reference probabilities; they are
+    not actual BUY observations or BUY entry capacity for these original protocols.
+    """
     if raw.empty or not meta: return pd.DataFrame(EMPTY_TAPE)
     token = {str(meta["yes_token"]): 0, str(meta["no_token"]): 1}
     x = raw.copy()
@@ -72,13 +80,16 @@ def normalize_raw(raw, cid, meta):
     return pd.DataFrame(dict(m=cid, s=np.where(buy, s, 1-s), ts=x.timestamp.to_numpy(float),
         q=np.where(buy, x.price, 1-x.price), size=x["size"].to_numpy(float),
         fee_rate=meta["fee_rate"], print_id=[f"{cid}:{i}" for i in x.index],
+        raw_action=x.side.to_numpy(), raw_token_side=s.to_numpy(),
+        raw_asset=x.asset.astype(str).to_numpy(), raw_price=x.price.to_numpy(float),
         w=x.proxyWallet.to_numpy() if "proxyWallet" in x else None))
 
 
 def market_metadata(cids):
     columns = ["condition_id", "outcome", "token_id", "payout", "fee_rate", "closed_ts", "event_slug", "market_slug", "neg_risk"]
     u = ds.dataset(C.DATA / "wallets/universe.parquet", format="parquet").to_table(
-        columns=columns, filter=ds.field("condition_id").isin(list(cids))).to_pandas()
+        columns=columns, filter=ds.field("condition_id").isin(list(cids)),
+        batch_size=16384, batch_readahead=0, fragment_readahead=1, use_threads=False).to_pandas()
     out = {}
     for cid, g in u.groupby("condition_id", sort=False):
         g = g.drop_duplicates(["outcome", "token_id", "payout"])
@@ -118,7 +129,16 @@ class GameData:
                     refs[leg] = pd.DataFrame(dict(ts=e.ts, p=e.p_yes, source="extra_reference_no_side"))
                     self.coverage["extra_reference"] += 1
             tape = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(EMPTY_TAPE)
-        self.replay = TapeReplay(tape)
+        # The two immutable indexes partition source prints by literal action.
+        # They are built once per game, then reused by every independent case.
+        # Missing/unknown provenance fails closed for entry and unwind capacity.
+        action = tape.get("raw_action", pd.Series(None, index=tape.index, dtype=object))
+        native = tape.get("raw_token_side", pd.Series(np.nan, index=tape.index))
+        buy = action.eq("BUY") & native.eq(tape.s)
+        sell = action.eq("SELL") & native.eq(1-tape.s)
+        self.replay = TapeReplay(tape[buy])
+        self.sell_replay = TapeReplay(tape[sell])
+        self.provenance = tape.reindex(columns=["print_id", *RAW_PROVENANCE]).drop_duplicates("print_id").set_index("print_id")
         if references is not None: refs = references
         elif not refs and len(tape):
             for leg, cid in self.cids.items():
@@ -141,7 +161,7 @@ class GameData:
         if bounds is None: return None
         a, b = bounds; i = a+np.searchsorted(self.replay.ts[a:b], ts, side="right")-1
         if i < a or ts-self.replay.ts[i] > max_age: return None
-        return dict(p=float(self.replay.q[i]), ts=float(self.replay.ts[i]), size=float(self.replay.size[i]), source="native_acquisition")
+        return dict(p=float(self.replay.q[i]), ts=float(self.replay.ts[i]), size=float(self.replay.size[i]), source="native_direct_buy")
 
     def observations(self, ts, side=0, horizon=60):
         found = {}
@@ -151,7 +171,7 @@ class GameData:
             a, b = bounds
             i = a+np.searchsorted(self.replay.ts[a:b], ts+3, side="right")
             if i >= b or self.replay.ts[i] >= min(ts+horizon, self.terminal): return None
-            found[leg] = dict(p=float(self.replay.q[i]), ts=float(self.replay.ts[i]), size=float(self.replay.size[i]), source="native_acquisition")
+            found[leg] = dict(p=float(self.replay.q[i]), ts=float(self.replay.ts[i]), size=float(self.replay.size[i]), source="native_direct_buy")
         return found
 
 
@@ -317,12 +337,16 @@ def make_signals(game, cfg):
 def execute(game, orders, slip=0.):
     """Shared first-print entry allocation, fixed quantity; failed pairs unwind all acquired legs.
 
-    Every paired policy has one acquisition orientation for all its legs within a game.
-    Opposite-side unwind prints cannot overlap its entry prints. All exits in that
-    policy share one replay capacity pool, including failed positions after later goals.
+    Entry and observation prints must be literal BUYs of the intended native token.
+    Unwinds must be literal SELLs of the held token. BUY and SELL indexes partition
+    source prints; each pool consumes capacity once across that policy's positions.
     """
     if orders.empty: return pd.DataFrame()
     r = game.replay.replay(orders, event_cap_usd=100., slip=slip)
+    r["action_policy"] = ACTION_POLICY
+    for c in RAW_PROVENANCE:
+        r["entry_"+c] = r.print_id.map(game.provenance[c])
+        r["exit_"+c] = pd.Series(None, index=r.index, dtype=object)
     r["entry_ts"] = r.fill_ts
     r["entry_fee_usd"] = r.fee_usd
     r["entry_cost_usd"] = r.cost_usd
@@ -336,17 +360,20 @@ def execute(game, orders, slip=0.):
         r.loc[g.index, "hedge_status"] = "complete" if complete else "failed_or_partial"
         if complete: continue
         for i, row in g[g.shares.gt(0)].iterrows():
-            # An opposite acquisition q is a sale proxy 1-q for the held original leg.
+            # A literal SELL of the held token normalizes to the opposite s at
+            # q=1-raw_price. The SELL-only index excludes BUY-opposite substitutes.
             exits.append(dict(row_id=i, m=row.m, s=1-row.s, signal_ts=row.expiry_ts,
                 receipt_ts=row.expiry_ts, expiry_ts=min(row.expiry_ts+3+120, game.terminal),
                 target_shares=row.shares, budget_usd=row.shares*2, event=row.event,
                 y=0., fee_rate=row.fee_rate))
     if exits:
-        x = game.replay.replay(pd.DataFrame(exits), event_cap_usd=np.inf, slip=slip)
+        x = game.sell_replay.replay(pd.DataFrame(exits), event_cap_usd=np.inf, slip=slip)
         for row in x[x.shares.gt(0)].itertuples():
             i = row.row_id; sale_price = 1-row.entry_price
             r.loc[i, ["sold_shares", "sale_proceeds", "exit_fee_usd", "residual_shares"]] = [row.shares, row.shares*sale_price, row.fee_usd, r.loc[i, "shares"]-row.shares]
             r.loc[i, "exit_print_id"] = row.print_id; r.loc[i, "exit_fill_ts"] = row.fill_ts
+            for c in RAW_PROVENANCE:
+                r.loc[i, "exit_"+c] = game.provenance.loc[row.print_id, c]
     r["payout"] = r.sale_proceeds+r.residual_shares*r.y
     r["fee_usd"] = r.entry_fee_usd+r.exit_fee_usd
     r["cost_usd"] = r.stake_usd+r.fee_usd
@@ -363,7 +390,7 @@ def execute(game, orders, slip=0.):
     r.loc[unfilled, ["exit_ts", "exit_price"]] = np.nan
     r["side"] = r.leg+np.where(r.s.eq(0), " Yes", " No")
     r["sport"] = "soccer"; r["slip"] = slip
-    r["note"] = "Historical acquired-side transaction proxy; unknown public receipt; "+r.hedge_status
+    r["note"] = "Literal native BUY entry / SELL unwind transaction proxy; unknown public receipt; "+r.hedge_status
     return r
 
 
@@ -507,7 +534,7 @@ def report_and_export(audit, trades, coverage, run_info):
     trades.to_parquet(OUT/"trades.parquet", index=False)
     (OUT/"results.json").write_text(json.dumps(payload,indent=2,allow_nan=False))
     paragraphs = ["# Five soccer hypotheses: causal continuation", "", "**No executable edge is established.** These are historically explored transaction proxies. The atomic three-book/depth claim is blocked by absent soccer order books; no historical public-feed receipt clocks were captured.", "",
-        f"Run: {run_info['games']} games, {run_info['events']} events; {run_info['scope']}. Development precedes July 1, 2026; the later period was already inspected and is exploratory, not fresh confirmation.", "",
+        f"Run: {run_info['games']} games, {run_info['events']} events; {run_info['scope']}; action policy {ACTION_POLICY}. Development precedes July 1, 2026; the later period was already inspected and is exploratory, not fresh confirmation.", "",
         "| Hypothesis | Period | Selected | Funded signals | Capital | Net P&L | ROI | 95% game CI | +1c ROI |",
         "|---|---|---:|---:|---:|---:|---:|---|---:|"]
     pct=lambda x: "n/a" if x is None else f"{100*x:+.2f}%"
@@ -517,14 +544,14 @@ def report_and_export(audit, trades, coverage, run_info):
             paragraphs.append(f"| {TITLES[family]} | {period} | {s['signals']} | {s['filled_signals']} | ${s['capital_usd']:.2f} | ${s['pnl_usd']:.2f} | {pct(s['roi'])} | {pct(s['ci_lo'])} to {pct(s['ci_hi'])} | {pct(stress['roi'])} |")
     paragraphs += ["", "## Frozen rules and causal corrections", "",
         "Red-card primary: first qualifying card at minute ≤65 when the carded team is not leading; buy opponent Yes. Late ≥70 is separate. Substitution primary: first qualifying first-half substitution ≤25, opponent reference 15–85c; this is an early-substitution proxy, with explicit injury text separately labeled. Both decide 300s after the event, require three previously observed reference probabilities, then enter strictly after another 3s within 600s. These delay corrections replace future h300 selection. An opponent may itself have an earlier red; the primary follows the original team-side rule and does not establish the 11-versus-10 mechanism.", "",
-        "Dutch-book: first actual acquired-Yes observations strictly after event+3 through event+60, ≤5s span; decide on the latest print. Trigger all-in observed unit cost <0.995. Submit NEW later orders after 3s; the observation prints are never execution. The No mirror requires actual acquired-No observations and <1.995, not complemented Yes asks. Equal quantities are fixed from these known observations, capped by their known sizes and $100/event. A void may pay 1.5 across three Yes or No legs; the advertised $1/$2 locks require compatible nonvoid settlement rules. No atomic or depth-based implementation is claimed.", "",
-        "Draw anchor: analogous three acquired-Yes observations, 5s span, |sum−1|≥5c. Underround buys both teams Yes; overround buys both No only when actual acquired-No references are available within 5s. Fixed share counts are proportional to the required-side prices. The original unspecified proportional sizing coefficient is frozen at min($100,1000×|gap|,smaller known leg notional). Entries occur after a new 3s delay. One first qualifying order per game. The 60s observation lookout is a declared causal bound.", "",
-        "Pairs receive a 60s entry window. Any leg failing its prescribed quantity triggers an attempted unwind of every acquired leg, using the first later opposite-side acquired print strictly after deadline+3 within 120s and before the regulation whistle. Its price 1−q is only a sale proxy, shares are capped, exit fees are charged, and all unsold residuals settle. Complete pairs settle. Each policy uses a shared print-capacity pool; independent policies reset it. Capital is $100/event including entry fees and is never recycled. Exit fees are additionally reported in total cost and ROI. No fill is required for a signal to remain in the audit.", "",
+        "Dutch-book: first literal BUY-Yes observations strictly after event+3 through event+60, ≤5s span; decide on the latest print. Trigger all-in observed unit cost <0.995. Submit NEW later orders after 3s; the observation prints are never execution. The No mirror requires literal BUY-No observations and <1.995, not complemented Yes asks. Equal quantities are fixed from these known observations, capped by their known sizes and $100/event. A void may pay 1.5 across three Yes or No legs; the advertised $1/$2 locks require compatible nonvoid settlement rules. No atomic or depth-based implementation is claimed.", "",
+        "Draw anchor: analogous three literal BUY-Yes observations, 5s span, |sum−1|≥5c. Underround buys both teams Yes; overround buys both No only when literal BUY-No references are available within 5s. Fixed share counts are proportional to the required-side prices. The original unspecified proportional sizing coefficient is frozen at min($100,1000×|gap|,smaller known leg notional). Entries occur after a new 3s delay. One first qualifying order per game. The 60s observation lookout is a declared causal bound.", "",
+        "Pairs receive a 60s entry window. Any leg failing its prescribed quantity triggers an attempted unwind of every acquired leg, using the first later literal SELL of the held native token strictly after deadline+3 within 120s and before the regulation whistle. The SELL normalizes to opposite-side q, so 1−q recovers its actual sale price before slippage; it is still a historical transaction proxy, shares are capped, exit fees are charged, and all unsold residuals settle. Complete pairs settle. Each policy uses a shared print-capacity pool; independent policies reset it. Capital is $100/event including entry fees and is never recycled. Exit fees are additionally reported in total cost and ROI. No fill is required for a signal to remain in the audit.", "",
         "Added time: parse explicit base+N clock, period 2 only, no ties or terminal-whistle rows, leader reference 60–97c, first qualifying event. Enter after 3s within 120s; +1c is the headline ledger sensitivity. Price-matched 75–85 and 70–80 controls use the same rule and prespecified 1c decision-price bins. Both arms retain no-fills and compare only their common price support. Joint game bootstrap preserves same-game covariance. Control ROI is a reweighted comparison, not additional simulated capacity.", "",
         "## Mandatory checks and interpretation", "",
         "Substitution coherence uses the same selected rows for all three leg errors, with a declared 1c mean-sum tolerance. The sum equals payout sum minus reference-price sum; failure is a coherence-gate failure, not proof of a particular causal selection mechanism. Anchor staleness regresses gap on log(1+age/count) using DEV only, reports historical out-of-period fit and residual violation rates. Failure of that simple model to explain a gap does not establish a valid draw anchor. Positive added-time ROI alone is insufficient: it must outperform the price-matched control, with uncertainty and overlap reported.", "", "```json", json.dumps(controls,indent=2,allow_nan=False), "```", "",
         "## Coverage and limitations", "", "```json", json.dumps(clean(coverage),indent=2), "```", "",
-        "Native asset IDs determine acquired direction; SELL complements its sold token. Extra tapes contain only ts/p_yes/size: they can provide past reference probabilities but never acquired-side detection, entry or exit capacity. References must be strictly earlier than decision (max age 600s, 120s for added time); no interpolation or invented asks. The all-three-price gate remains an explicit rejection reason. Market terminal payouts include valid 0.5 voids; no winner-only selection or future final-score/feed-consistency eligibility gate is used. Final quality flags are audit fields.", "",
+        "Native asset IDs identify the traded token. Literal BUY of the intended token is mandatory for detection/entry, and literal SELL of the held token is mandatory for unwind; a complementary trade cannot substitute for either action. The saved trade audit preserves raw action, native token, raw price and print identity. Historical single-leg reference probabilities may still use normalized SELL complements, explicitly separated from execution. Extra tapes contain only ts/p_yes/size: they can provide past reference probabilities but never acquired-side detection, entry or exit capacity. References must be strictly earlier than decision (max age 600s, 120s for added time); no interpolation or invented asks. The all-three-price gate remains an explicit rejection reason. Market terminal payouts include valid 0.5 voids; no winner-only selection or future final-score/feed-consistency eligibility gate is used. Final quality flags are audit fields.", "",
         "ESPN wallclocks are retrospectively stored event timestamps, not measured arrival at a free feed. Even the delayed entries may be optimistic. Regulation whistle/closure expiries analytically censor eligibility; they do not promise exchange-valid short GTD orders or guaranteed cancellation. Printed sizes bound hypothetical capacity, not available order-book depth, minimum order admissibility, or fills obtainable by us. API coverage remains incomplete and the collected universe carries legacy selection effects. ROI includes entry and exit fees; bootstrap intervals are nominal game-cluster intervals, not multiple-testing-adjusted evidence or p-values.", "",
         "## Completed scope and remaining variants", "",
         "Implemented: all five primary transaction protocols, red-card late branch, mandatory substitution coherence, anchor staleness, and added-time matched controls. Atomic three-book execution and soccer live depth: blocked by no captured soccer books. Detailed completed variant names and both slippage scenarios appear in results.json. Unrun optional variants: red-card matched non-card control, added draw-No leg and alternate late cuts; substitution <2c movement gate; Dutch pregame control; anchor per-leg draw-fair sizing. League/goal-type/lead/home-away splits remain available in full audits but are not claimed run. No variant is selected as a winner.", "",
@@ -539,12 +566,13 @@ def report_and_export(audit, trades, coverage, run_info):
             x=controls["added_time_vs_control"].get("holdout",{})
             if x.get("difference") is not None and x["difference"]<=0: verdict="DEAD"
         meta=dict(slug=slug,title=TITLES[family],group="Thorp hypotheses",sport="soccer",verdict=verdict,
+            action_policy=ACTION_POLICY,
             hypothesis=TITLES[family],mechanism="Original frozen soccer hypothesis; causal transaction-proxy test only",
-            entry_rule="See full protocol and signal audit; new acquired-side prints strictly after decision plus delay",
-            exit_rule="Settlement; failed pairs attempt bounded partial unwind and retain residual exposure",
+            entry_rule="Literal BUY of the intended native token strictly after decision plus delay; references are not execution",
+            exit_rule="Settlement; failed pairs attempt bounded literal SELL of held tokens and retain unsold residual exposure",
             cost_model="Actual allocated shares; historical market fees; ROI divides net P&L by entry principal plus all charged fees",
             periods={"dev":"before 2026-07-01","holdout":"2026-07-01 onward, already explored"},
-            caveats=["No measured historical receipt latency or executable soccer depth", "No atomic execution proof", "Full candidate and leg audit; no-fills are zero capital", f"{run_info['scope']}; slippage {'.01' if family=='leader' else '0'}"],
+            caveats=["No measured historical receipt latency or executable soccer depth", "Literal BUY entry and literal SELL unwind; economic complements are reference-only", "No atomic execution proof", "Full candidate and leg audit; no-fills are zero capital", f"{run_info['scope']}; slippage {'.01' if family=='leader' else '0'}"],
             report_path="reports/research/SOCCER_CONTINUATION.md",code_path="pmsports/research/h_soccer_continuation.py")
         doc=_document(meta,t)
         target=C.RESEARCH/"ledgers"/f"{slug}.json";target.parent.mkdir(parents=True,exist_ok=True)
@@ -569,19 +597,24 @@ def run(max_games=None):
     conf=configs()
     for n,(event,p) in enumerate(panel.groupby("event_slug",sort=True),1):
         game=GameData(p,meta)
+        game_a,game_t=[],[]
         coverage["native_leg_games"]+=game.coverage["native"]
         coverage["extra_reference_leg_games"]+=game.coverage["extra_reference"]
         coverage["all_three_native_games"]+=int(game.coverage["native"]==3)
         coverage["missing_metadata_legs"]+=sum(x is None for x in game.meta.values())
         for cfg in conf:
             a,o=make_signals(game,cfg)
-            if len(a): all_a.append(a)
+            if len(a): game_a.append(a)
             if len(o):
-                for slip in (0.,.01): all_t.append(execute(game,o,slip))
+                for slip in (0.,.01): game_t.append(execute(game,o,slip))
+        # Retain at most one audit/trade frame per game instead of thousands of
+        # tiny per-configuration frames. Concatenation preserves case/row order.
+        if game_a: all_a.append(pd.concat(game_a,ignore_index=True))
+        if game_t: all_t.append(pd.concat(game_t,ignore_index=True))
         if n%100==0: print(f"soccer {n}/{len(keys)} games; {time.monotonic()-started:.1f}s",flush=True)
     audit=pd.concat(all_a,ignore_index=True) if all_a else pd.DataFrame(columns=["family","variant","period","selected","reason","event","gap"])
     trades=pd.concat(all_t,ignore_index=True) if all_t else pd.DataFrame(columns=["family","variant","period","slip","signal_id","event","cost_usd"])
-    run_info=dict(games=len(keys),events=len(panel),elapsed_s=time.monotonic()-started,scope="full local panel" if max_games is None else f"bounded smoke max_games={max_games}",execution=VERSION)
+    run_info=dict(games=len(keys),events=len(panel),elapsed_s=time.monotonic()-started,scope="full local panel" if max_games is None else f"bounded smoke max_games={max_games}",execution=VERSION,action_policy=ACTION_POLICY)
     result=report_and_export(audit,trades,coverage,run_info)
     inputs=[PANEL,C.DATA/"wallets/universe.parquet"]+[p for cid in cids for p in (TAPES/f"{cid}.parquet",EXTRAS/f"{cid}.parquet") if p.exists()]
     manifest=dict(run=run_info,source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
