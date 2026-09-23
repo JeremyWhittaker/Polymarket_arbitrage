@@ -2,6 +2,9 @@
 
 This project investigates sports-feed timing, state-based prices, favorite calibration,
 and copying informed wallets. It is a research tool; no real-money orders are placed.
+The recovered [baseball](reports/research/BASEBALL_CONTINUATION.md),
+[football](reports/research/football_wp_ladder.md) and
+[received-book](reports/research/LIVE_EXECUTION.md) studies now use corrected cash and timing.
 
 **No executable trading edge has been established.** Repairs and reruns are in progress.
 The [independent review](reports/PEER_REVIEW.md) maps Jeremy's original prompts to the
@@ -51,8 +54,10 @@ historical minimum-size constraints unobserved; they do not establish future ret
 - The [shared execution protocol](reports/EXECUTION_PROTOCOL.md) requires a strictly later
   acquired-side print, excludes a copied leader's own transactions, consumes each print's
   shares once, and retains partial fills and no-fills. Actual allocated capital includes fees.
-  The rebuilt compact cache contains 53,771,660 valid fills across 38,370 markets; existing
-  market IDs are preserved. This remains a selected historical sample.
+  The compact cache preserves 53,771,660 normalized source rows across 38,370 market IDs.
+  Three corrupt negative prices are excluded before volume, ranking and execution calculations;
+  the full price analysis uses 53,771,657 valid-price prints. Existing market IDs are preserved.
+  This remains a selected historical sample.
 
 ## Run
 
