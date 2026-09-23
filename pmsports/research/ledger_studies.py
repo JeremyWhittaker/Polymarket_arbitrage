@@ -289,13 +289,13 @@ def copy_wallets_ledger(delay=30):
     def col(name):
         return cp[f"{pref}{name}_d{delay}"]
     price = cp[f"{pref}q_d{delay}"]
-    labels = u[["condition_id", "outcome_idx", "outcome"]].drop_duplicates()
+    labels = u.reindex(columns=["condition_id", "outcome_idx", "outcome"]).dropna(subset=["condition_id", "outcome_idx"]).drop_duplicates()
     labels = labels.loc[~labels.duplicated(["condition_id", "outcome_idx"], keep=False)]
     labels = labels.pivot(index="condition_id", columns="outcome_idx", values="outcome").reindex(columns=[0,1])
     sides = [cp.condition_id.map(labels[s]).astype("string").fillna("Outcome unavailable") for s in (0,1)]
     filled = col("shares").gt(0)
     led = pd.DataFrame(dict(period="holdout",sport=cp.family.astype(str),league="",event=cp.event_slug.astype(str),
-        market=cp.condition_id.map(meta.market_slug).astype("string").fillna("Market unavailable"),
+        market=cp.condition_id.map(meta.get("market_slug", pd.Series(index=meta.index, dtype=str))).astype("string").fillna("Market unavailable"),
         side=np.where(cp.side_idx == 0,sides[0],sides[1]),
         signal_ts=col("signal_ts"),receipt_ts=col("receipt_ts"),eligible_ts=col("eligible_ts"),expiry_ts=col("expiry_ts"),
         entry_ts=col("fill_ts"),entry_price=price,shares=col("shares"),stake_usd=col("stake_usd"),
