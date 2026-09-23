@@ -24,12 +24,27 @@ from ..execution import TapeReplay
 
 # ----------------------------------------------------------------------------- positions / stats
 
+def valid_trade_mask(t: pd.DataFrame) -> pd.Series:
+    """Reject corrupted source economics before ranking or allocating copied orders."""
+    if t.empty:
+        return pd.Series(False, index=t.index, dtype=bool)
+    return (t.q.between(0,1,inclusive="neither") & t["size"].gt(0) & np.isfinite(t["size"])
+            & np.isfinite(t.timestamp) & t.side_idx.isin([0,1]) & t.y.isin([0,.5,1])
+            & np.isfinite(t.fee_rate) & t.fee_rate.ge(0))
+
+
+def valid_trades(t: pd.DataFrame) -> pd.DataFrame:
+    valid = valid_trade_mask(t)
+    return t if valid.all() else t.loc[valid]
+
+
 def positions(t: pd.DataFrame) -> pd.DataFrame:
     """Per (wallet, market) exposure, P&L and luck variance.
 
     numpy sort + reduceat on a combined integer key: memory stays ~a few arrays of len(t)
     (a pandas groupby over a wide temp frame OOMs at ~50M fills).
     """
+    t = valid_trades(t)
     if t.empty:
         out = pd.DataFrame({c: pd.Series(dtype=float) for c in ("cost", "pnl", "fee", "a", "b", "shares", "in_play", "n", "ts", "var", "pnl_net")})
         for target, source in (("proxyWallet", "proxyWallet"), ("condition_id", "condition_id"), ("family", "family"), ("event", "event_slug")):
@@ -130,10 +145,11 @@ def copy_prices(t: pd.DataFrame, rows: pd.DataFrame, delays=(0, 5, 30, 60), hori
     orders = pd.DataFrame({"m": gb["mcat"].get_indexer(rows.condition_id), "s": rows.side_idx.to_numpy(),
         "signal_ts": rows.timestamp.to_numpy(float), "leader_w": gb["wcat"].get_indexer(rows.proxyWallet),
         "event": rows.event_slug.to_numpy(), "y": rows.y.to_numpy(float)})
+    valid = valid_trade_mask(rows).to_numpy()
     for d in delays:
         for name, budget in (("", np.full(len(rows), 100.)),
                              ("prop_", np.minimum(100., .01 * rows["size"].to_numpy() * rows.q.to_numpy()))):
-            result = gb["replay"].replay(orders.assign(budget_usd=budget), delay_s=d,
+            result = gb["replay"].replay(orders.assign(budget_usd=np.where(valid,budget,0.)), delay_s=d,
                                         horizon_s=horizon, event_cap_usd=100.)
             extra[f"{name}q_d{d}"] = result.entry_price.to_numpy()
             for col in ("signal_ts", "receipt_ts", "eligible_ts", "expiry_ts", "fill_ts", "print_id", "shares",

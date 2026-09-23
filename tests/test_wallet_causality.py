@@ -120,3 +120,46 @@ def test_cache_hash_includes_shared_execution(monkeypatch, tmp_path):
     first=report.get_code_hash()
     source.write_text('version=2')
     assert report.get_code_hash()!=first
+
+
+def test_corrupt_quote_cannot_improve_ranking_or_trigger_copy():
+    from pmsports.wallets import skill
+    t,_=_mock_data()
+    bad=t.iloc[[0]].copy();bad['q']=-10.;bad['size']=1e6;bad['timestamp']=90
+    combined=pd.concat([t,bad],ignore_index=True)
+    pd.testing.assert_frame_equal(skill.positions(combined),skill.positions(t))
+    copied=skill.copy_prices(combined,bad,delays=(0,))
+    assert len(copied)==1
+    assert copied.cost_usd_d0.iloc[0]==0 and copied.prop_cost_usd_d0.iloc[0]==0
+    assert pd.isna(copied.fill_ts_d0.iloc[0])
+
+
+def test_wallet_comparison_does_not_sample_future_event_set(monkeypatch):
+    t,_=_mock_data();rows=pd.concat([t.iloc[[2]]]*20,ignore_index=True)
+    rows['event_slug']=pd.Categorical([f'e{i}' for i in range(20)])
+    monkeypatch.setattr(study,'MAX_COPY_ROWS',1,raising=False)
+    captured=[]
+    monkeypatch.setattr(study.skill,'build_groups',lambda _: {'stub':True})
+    def copy(t,selected,**kw):captured.append(len(selected));return selected
+    monkeypatch.setattr(study.skill,'copy_prices',copy)
+    monkeypatch.setattr(study.skill,'copy_returns',lambda rows,*args,**kw:rows)
+    monkeypatch.setattr(study.skill,'summarize_copy',lambda rows:dict(roi=0.,ci_lo=0.,ci_hi=0.,trades=len(rows)))
+    stats=pd.DataFrame(dict(markets=[20],staked=[100.],pnl=[1.],pnl_net=[.5]),index=['w1'])
+    got=study.evaluate(rows,stats,['w1'],{})
+    assert captured==[20] and got['copy_d30_trades']==20
+
+
+def test_monthly_default_keeps_more_than_old_40000_signal_limit(monkeypatch):
+    t,_=_mock_data();history=t.iloc[[0]].copy();history['timestamp']=pd.Timestamp('2025-01-15',tz='UTC').timestamp()
+    nxt=pd.concat([t.iloc[[2]]]*40001,ignore_index=True)
+    nxt['timestamp']=pd.Timestamp('2025-02-15',tz='UTC').timestamp()+np.arange(len(nxt))
+    both=pd.concat([history,nxt],ignore_index=True)
+    meta=pd.DataFrame(dict(condition_id=['c1','c3'],closed_ts=[history.timestamp.iloc[0]+1,nxt.timestamp.max()+1])).set_index('condition_id')
+    monkeypatch.setattr(study,'MIN_MKTS',1)
+    monkeypatch.setattr(pd.DataFrame,'sample',lambda *a,**k: (_ for _ in ()).throw(AssertionError('future-event sampling')))
+    monkeypatch.setattr(pd.Series,'sample',lambda *a,**k: (_ for _ in ()).throw(AssertionError('future-event sampling')))
+    monkeypatch.setattr(study.skill,'build_groups',lambda _: {'stub':True})
+    monkeypatch.setattr(study.skill,'copy_prices',lambda tape,selected,**kw:selected)
+    monkeypatch.setattr(study.skill,'copy_returns',lambda rows,*a,**kw:rows.assign(copy_roi=.1,w=1.))
+    got=study.walk_forward(both,'2025-02-01','2025-03-01',rules=('z',),delays=(0,),meta=meta)
+    assert got.trades.tolist()==[40001] and got.staked.tolist()==[40001.]

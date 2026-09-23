@@ -67,6 +67,9 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     meta = u.drop_duplicates("condition_id").set_index("condition_id")
     lb = pd.read_parquet(OUT / "leaderboard.parquet")
     t = load_trades(u)
+    raw_rows = len(t)
+    t = study.skill.valid_trades(t)
+    log.info("excluded %d invalid economic/source rows before wallet analysis", raw_rows-len(t))
     log.info("loaded %d fills, %d wallets, %d markets", len(t), t.proxyWallet.nunique(), t.condition_id.nunique())
 
     cache = OUT / "report_cache"
@@ -212,8 +215,9 @@ def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None, run_id="") -
           "dollar P&L, `capital_usd` includes fees, and `copy_roi` is their ratio. The old backend field `pnl_per_$1` "
           "contains these dollars and is renamed on export. Months with no fills are omitted by the backend, so "
           "`filled_months_positive` uses only months with fills; it is not an all-calendar-month success rate. "
-          "The monthly audit CSV preserves cash totals. Some comparison paths sample whole events when their "
-          "signal counts exceed the configured limit; the full FDR ledger is separately unsampled.", "", _md(wfa), ""]
+          "The monthly audit CSV preserves cash totals. Every selected signal is replayed without future-event "
+          "sampling or row truncation; the full FDR ledger also includes all signals. Invalid price, size, "
+          "fee, side or payout inputs cannot rank a wallet or allocate a copied order.", "", _md(wfa), ""]
     bc = ["min_usd", "phase", "trades", "leader_roi", "copy_d0", "copy_d5", "copy_d30", "copy_d30_ci",
           "copy_d60", "price_move_5min"]
     L += ["## 4. Follow the big money (any wallet, 2026)", "",

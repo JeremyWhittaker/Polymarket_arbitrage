@@ -27,7 +27,6 @@ log = logging.getLogger("pmsports")
 MIN_MKTS = 30
 TOP_K = 50
 DELAYS = (0, 5, 30, 60)
-MAX_COPY_ROWS = 150_000
 
 
 def _causal_cutoff(t: pd.DataFrame, max_ts: float, meta: pd.DataFrame) -> pd.Series:
@@ -80,9 +79,6 @@ def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache:
     key = tuple(sorted(ws))
     if key not in rows_cache:
         rows = t2[t2.proxyWallet.isin(ws)]
-        if len(rows) > MAX_COPY_ROWS:   # sample whole events so the clustered CI stays honest
-            ev = rows.event_slug.drop_duplicates().sample(frac=MAX_COPY_ROWS / len(rows), random_state=5)
-            rows = rows[rows.event_slug.isin(ev)]
         if "_groups" not in rows_cache:
             rows_cache["_groups"] = skill.build_groups(t2)
         rows_cache[key] = skill.copy_prices(t2, rows, delays=DELAYS, groups=rows_cache["_groups"])
@@ -106,8 +102,9 @@ def placebo(t2, s1, s2, n_draws=200, seed=3) -> pd.DataFrame:
     for i in range(n_draws):
         ws = [w for w in rng.choice(pool, size=min(TOP_K, len(pool)), replace=False) if w in s2.index]
         own = s2.loc[ws]
-        rows.append({"draw": i, "p2_roi": own.pnl.sum() / own.staked.sum(),
-                     "p2_roi_net_fee": own.pnl_net.sum() / own.staked.sum()})
+        capital = own.staked.sum()
+        rows.append({"draw": i, "p2_roi": own.pnl.sum() / capital if capital > 0 else np.nan,
+                     "p2_roi_net_fee": own.pnl_net.sum() / capital if capital > 0 else np.nan})
     return pd.DataFrame(rows)
 
 
@@ -166,7 +163,7 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
         sub = t2[usd >= x]
         if sub.empty:
             continue
-        cp = skill.copy_prices(t2, sub, delays=(0,) + tuple(delays), groups=gb)
+        cp = skill.copy_prices(t2, sub, delays=tuple(dict.fromkeys((0,) + tuple(delays) + (300,))), groups=gb)
         for phase, m in [("all", slice(None)), ("pregame", ~cp.in_play), ("in_play", cp.in_play)]:
             part = cp[m] if not isinstance(m, slice) else cp
             rec = {"min_usd": x, "phase": phase, "trades": len(part),
@@ -177,14 +174,13 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
                 rec[f"copy_d{d}"] = c["roi"]
                 rec[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
             # information: does the side's price move the leader's way within 5 minutes?
-            part5 = skill.copy_prices(t2, part.head(20000), delays=(300,), groups=gb)
-            rec["price_move_5min"] = float((part5.q_d300 - part5.q).mean())
+            rec["price_move_5min"] = float((part.q_d300 - part.q).mean())
             rows.append(rec)
     return pd.DataFrame(rows)
 
 
 def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180,
-                 rules=("z", "whales", "random"), delays=(0, 30), max_rows: int = 40_000,
+                 rules=("z", "whales", "random"), delays=(0, 30),
                  meta: pd.DataFrame | None = None) -> pd.DataFrame:
     """Each month: pick top-K wallets on the trailing window, copy their next-month trades.
 
@@ -215,9 +211,6 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
                  "random": act.index[rng.choice(len(act), size=min(TOP_K, len(act)), replace=False)]
                  if len(act) else act.index}
         chosen = {r: nxt[nxt.proxyWallet.isin(picks[r])] for r in rules}
-        chosen = {r: (x if len(x) <= max_rows else
-                      x[x.event_slug.isin(x.event_slug.drop_duplicates().sample(
-                          frac=max_rows / len(x), random_state=int(a) % 2**31))]) for r, x in chosen.items()}
         if not any(len(x) for x in chosen.values()):
             continue
         # These are independent policies, not orders in one combined portfolio.
