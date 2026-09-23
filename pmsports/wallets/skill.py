@@ -15,11 +15,26 @@ selection rule is compared with random wallets of similar activity (placebo).
 """
 from __future__ import annotations
 
+import logging
+import os
+import resource
+from pathlib import Path
 import numpy as np
 import pandas as pd
 
 from ..polymarket import taker_fee
 from ..execution import TapeReplay
+
+
+def log_progress(label: str, **counts):
+    """Phase evidence survives a failed long run; RSS is diagnostic, not a limit."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    try:
+        rss = int(Path('/proc/self/statm').read_text().split()[1]) * os.sysconf('SC_PAGE_SIZE') / 2**20
+    except (OSError, ValueError, IndexError):
+        rss = float('nan')
+    logging.getLogger('pmsports').info('[wallet] %s %s rss_MiB=%.1f peak_MiB=%.1f',
+        label, ' '.join(f'{k}={v}' for k,v in counts.items()), rss, peak)
 
 
 # ----------------------------------------------------------------------------- positions / stats
@@ -297,7 +312,10 @@ def build_groups(t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS,
         raise ValueError("market closure metadata must have unique condition IDs")
     closed = pd.to_numeric(meta.closed_ts.reindex(t.condition_id.cat.categories), errors="coerce").to_numpy(float, copy=True)
     closed[~np.isfinite(closed) | (closed <= 0)] = np.nan
-    return {"replay": _WalletTapeReplay(t, batch_rows=batch_rows), "wcat": t.proxyWallet.cat.categories,
+    log_progress('tape index start', fills=len(t), markets=len(t.condition_id.cat.categories))
+    replay = _WalletTapeReplay(t, batch_rows=batch_rows)
+    log_progress('tape index done', fills=len(replay.tape), market_sides=len(replay.groups))
+    return {"replay": replay, "wcat": t.proxyWallet.cat.categories,
             "mcat": t.condition_id.cat.categories, "closed_ts": closed}
 
 
@@ -342,13 +360,16 @@ def copy_prices(t: pd.DataFrame, rows: pd.DataFrame, delays=(0, 5, 30, 60), hori
     return pd.concat([out, pd.DataFrame(extra, index=out.index)], axis=1)
 
 
-def copy_returns(rows: pd.DataFrame, delay: int, stake: str = "equal") -> pd.DataFrame:
+def copy_returns(rows: pd.DataFrame, delay: int, stake: str = "equal", *, keep_audit: bool = True) -> pd.DataFrame:
     """Follower results weighted by actually allocated capital, not imaginary$100 bets."""
     prefix = "" if stake == "equal" else "prop_"
     cost_col = f"{prefix}cost_usd_d{delay}"
     if cost_col not in rows:
         raise ValueError("legacy copy-price cache lacks consumed-share audit; rerun copy_prices")
-    r = rows[rows[cost_col] > 0].copy()
+    needed = ["event_slug", "in_play"] + [f"{prefix}{c}_d{delay}" for c in
+                ("roi", "q", "shares", "print_id", "cost_usd")]
+    source = rows if keep_audit else rows[needed]
+    r = source.loc[rows[cost_col] > 0].copy()
     r["copy_roi"] = r[f"{prefix}roi_d{delay}"]
     r["copy_q"] = r[f"{prefix}q_d{delay}"]
     r["copy_shares"] = r[f"{prefix}shares_d{delay}"]
@@ -357,15 +378,105 @@ def copy_returns(rows: pd.DataFrame, delay: int, stake: str = "equal") -> pd.Dat
     return r
 
 
-def summarize_copy(r: pd.DataFrame, n_boot: int = 1000, seed: int = 11) -> dict:
-    """Stake-weighted ROI with an event-clustered bootstrap CI (trades in one game move together)."""
+def _copy_event_totals(r: pd.DataFrame) -> pd.DataFrame:
+    # Retain the original per-event Series.sum (numpy reduction), not groupby.sum's
+    # different compensated accumulation. Never hand the wide audit to groupby.
     if r.empty:
-        return {"trades": 0, "events": 0, "roi": np.nan, "ci_lo": np.nan, "ci_hi": np.nan}
-    e = r.groupby("event_slug", observed=True).apply(
-        lambda x: pd.Series({"pnl": (x.copy_roi * x.w).sum(), "w": x.w.sum()}), include_groups=False)
+        return pd.DataFrame(columns=["pnl", "w"], index=r.event_slug.iloc[:0])
+    narrow = pd.DataFrame({"event_slug": r.event_slug, "pnl": r.copy_roi * r.w, "w": r.w})
+    return narrow.groupby("event_slug", observed=True).apply(
+        lambda x: pd.Series({"pnl": x.pnl.sum(), "w": x.w.sum()}), include_groups=False)
+
+
+def _summarize_events(e: pd.DataFrame, trades: int, n_boot: int = 1000, seed: int = 11) -> dict:
+    if e.empty:
+        return {"trades": trades, "events": 0, "roi": np.nan, "ci_lo": np.nan, "ci_hi": np.nan}
     roi = e.pnl.sum() / e.w.sum()
     rng = np.random.default_rng(seed)
-    idx = rng.integers(0, len(e), size=(n_boot, len(e)))
-    boots = e.pnl.to_numpy()[idx].sum(1) / e.w.to_numpy()[idx].sum(1)
-    return {"trades": len(r), "events": len(e), "roi": float(roi),
+    boots = np.empty(n_boot)
+    # Identical flat RNG sequence and per-draw summation, bounded index temporaries.
+    step = max(1, 250_000 // len(e))
+    pnl, cash = e.pnl.to_numpy(), e.w.to_numpy()
+    for start in range(0, n_boot, step):
+        end = min(start + step, n_boot)
+        idx = rng.integers(0, len(e), size=(end-start, len(e)))
+        boots[start:end] = pnl[idx].sum(1) / cash[idx].sum(1)
+    return {"trades": trades, "events": len(e), "roi": float(roi),
             "ci_lo": float(np.percentile(boots, 2.5)), "ci_hi": float(np.percentile(boots, 97.5))}
+
+
+def summarize_copy(r: pd.DataFrame, n_boot: int = 1000, seed: int = 11) -> dict:
+    """Original stake-weighted event bootstrap, with narrow bounded temporaries."""
+    if r.empty:
+        return {"trades": 0, "events": 0, "roi": np.nan, "ci_lo": np.nan, "ci_hi": np.nan}
+    return _summarize_events(_copy_event_totals(r), len(r), n_boot, seed)
+
+
+def copy_summary(t: pd.DataFrame, rows: pd.DataFrame, delay: int, *, stake: str = "equal",
+                 groups: dict | None = None, meta: pd.DataFrame | None = None,
+                 phases=("all",), cash_details: bool = False, diagnostic_move: bool = False,
+                 batch_orders: int = 25_000, label: str = "copy") -> dict:
+    """Replay every signal, retaining event summaries instead of a full audit table.
+
+    Complete market/event connected components share one allocation pool. Phase
+    filters are applied AFTER allocation. The canonical ledger still uses the full
+    copy_prices audit. One oversize connected component is necessarily kept intact.
+    """
+    if stake not in ("equal", "proportional") or not set(phases) <= {"all", "pregame", "in_play"}:
+        raise ValueError("unknown copy sizing policy or phase")
+    if not isinstance(batch_orders, (int, np.integer)) or batch_orders < 1:
+        raise ValueError("batch_orders must be positive")
+    gb = groups or build_groups(t, meta=meta)
+    # Categorical event values avoid a full-row object-string conversion here.
+    links = pd.DataFrame({"m": gb["mcat"].get_indexer(rows.condition_id),
+                          "event": rows.event_slug.reset_index(drop=True)}, copy=False)
+    batches = _WalletTapeReplay.order_batches(links, batch_orders=batch_orders)
+    del links
+    log_progress(f'{label} delay={delay} policy={stake} start', signals=len(rows),
+                 batches=len(batches), max_batch=max(map(len,batches),default=0))
+    totals = {p: [] for p in phases}
+    counts = dict.fromkeys(phases, 0)
+    cash_parts = []
+    moves = np.full(len(rows), np.nan) if diagnostic_move else None
+    for i, positions in enumerate(batches):
+        audit = copy_prices(t, rows.iloc[positions], delays=(delay,), groups=gb, policies=(stake,))
+        funded = copy_returns(audit, delay, stake=stake, keep_audit=False)
+        if diagnostic_move:
+            prefix = '' if stake == 'equal' else 'prop_'
+            moves[positions] = audit[f'{prefix}q_d{delay}'].to_numpy() - audit.q.to_numpy()
+        if cash_details:
+            prefix = '' if stake == 'equal' else 'prop_'
+            funded_positions = positions[audit[f'{prefix}cost_usd_d{delay}'].to_numpy() > 0]
+            # Only monthly cash totals need original global-row summation order.
+            cash_parts.append(pd.DataFrame({'position': funded_positions,
+                'copy_roi': funded.copy_roi.to_numpy(), 'w': funded.w.to_numpy(),
+                'in_play': funded.in_play.to_numpy()}))
+        del audit
+        for phase in phases:
+            part = funded if phase == 'all' else funded.loc[funded.in_play.eq(phase == 'in_play')]
+            counts[phase] += len(part)
+            if len(part):
+                totals[phase].append(_copy_event_totals(part))
+        del funded
+        if (i+1) % 20 == 0 or i+1 == len(batches):
+            log_progress(f'{label} delay={delay} policy={stake} replay', batches_done=i+1,
+                         batches=len(batches), signals_done=sum(map(len,batches[:i+1])))
+    cash = (pd.concat(cash_parts, ignore_index=True).sort_values('position', kind='stable')
+            if cash_parts else pd.DataFrame(columns=['position','copy_roi','w','in_play']))
+    result = {}
+    for phase in phases:
+        e = pd.concat(totals[phase]).sort_index() if totals[phase] else pd.DataFrame(columns=['pnl','w'])
+        if e.index.duplicated().any():
+            raise AssertionError('copy summary split an event across independent allocation pools')
+        summary = _summarize_events(e, counts[phase])
+        if cash_details:
+            part = cash if phase == 'all' else cash.loc[cash.in_play.eq(phase == 'in_play')]
+            summary.update(pnl=float((part.copy_roi * part.w).sum()), capital=float(part.w.sum()),
+                           in_play_share=float(part.in_play.mean()))
+        if diagnostic_move:
+            values = moves if phase == 'all' else moves[rows.in_play.to_numpy() == (phase == 'in_play')]
+            summary.update(funded_move_5_10min=float(pd.Series(values).mean()),
+                           move_funded_signals=int(np.isfinite(values).sum()))
+        result[phase] = summary
+    log_progress(f'{label} delay={delay} policy={stake} done', signals=len(rows), funded=counts)
+    return result

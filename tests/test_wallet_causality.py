@@ -145,13 +145,13 @@ def test_wallet_comparison_does_not_sample_future_event_set(monkeypatch):
     monkeypatch.setattr(study,'MAX_COPY_ROWS',1,raising=False)
     captured=[]
     monkeypatch.setattr(study.skill,'build_groups',lambda _,**kw: {'stub':True})
-    def copy(t,selected,**kw):captured.append(len(selected));return selected
-    monkeypatch.setattr(study.skill,'copy_prices',copy)
-    monkeypatch.setattr(study.skill,'copy_returns',lambda rows,*args,**kw:rows)
-    monkeypatch.setattr(study.skill,'summarize_copy',lambda rows:dict(roi=0.,ci_lo=0.,ci_hi=0.,trades=len(rows)))
+    def copy(t,selected,delay,**kw):
+        captured.append(len(selected))
+        return {'all':dict(roi=0.,ci_lo=0.,ci_hi=0.,trades=len(selected))}
+    monkeypatch.setattr(study.skill,'copy_summary',copy)
     stats=pd.DataFrame(dict(markets=[20],staked=[100.],pnl=[1.],pnl_net=[.5]),index=['w1'])
     got=study.evaluate(rows,stats,['w1'],{},meta=_far_future_meta(rows))
-    assert captured==[20]*len(study.DELAYS) and got['copy_d30_trades']==20
+    assert captured==[20]*(len(study.DELAYS)+1) and got['copy_d30_trades']==20
 
 
 def test_monthly_default_keeps_more_than_old_40000_signal_limit(monkeypatch):
@@ -164,8 +164,8 @@ def test_monthly_default_keeps_more_than_old_40000_signal_limit(monkeypatch):
     monkeypatch.setattr(pd.DataFrame,'sample',lambda *a,**k: (_ for _ in ()).throw(AssertionError('future-event sampling')))
     monkeypatch.setattr(pd.Series,'sample',lambda *a,**k: (_ for _ in ()).throw(AssertionError('future-event sampling')))
     monkeypatch.setattr(study.skill,'build_groups',lambda _,**kw: {'stub':True})
-    monkeypatch.setattr(study.skill,'copy_prices',lambda tape,selected,**kw:selected)
-    monkeypatch.setattr(study.skill,'copy_returns',lambda rows,*a,**kw:rows.assign(copy_roi=.1,w=1.))
+    monkeypatch.setattr(study.skill,'copy_summary',lambda tape,selected,delay,**kw:
+        {'all':dict(trades=len(selected),pnl=.1*len(selected),capital=float(len(selected)),in_play_share=0.)})
     got=study.walk_forward(both,'2025-02-01','2025-03-01',rules=('z',),delays=(0,),meta=meta)
     assert got.trades.tolist()==[40001] and got.staked.tolist()==[40001.]
 
@@ -204,7 +204,8 @@ def test_evaluation_caches_small_summaries_and_matches_full_audit(monkeypatch):
     monkeypatch.setattr(skill,'copy_prices',capture)
     cache={}
     result=study.evaluate(t,stats,['leader'],cache,meta=_far_future_meta(t))
-    assert calls==[((d,),('equal','proportional') if d==30 else ('equal',)) for d in study.DELAYS]
+    assert calls==[((d,),(policy,)) for d in study.DELAYS
+                  for policy in (('equal','proportional') if d==30 else ('equal',))]
     assert {key:result[key] for key in expected}==expected
     assert cache[('leader',)]==expected
     assert all(np.isscalar(value) for value in cache[('leader',)].values())
@@ -580,4 +581,151 @@ def test_production_bigtrade_walk_and_decomposition_propagate_metadata_and_polic
     assert seen and set(seen)=={('equal',)}
     seen.clear();monkeypatch.setattr(skill,'fdr_survivors',lambda _:pd.Series(['leader']))
     study.decompose_skilled(full,'2025-02-01',delays=(0,),meta=meta)
-    assert seen==[('equal','proportional')]
+    assert seen==[('proportional',),('equal',)]
+
+
+def _legacy_copy_summary(r, n_boot=1000, seed=11):
+    if r.empty:
+        return dict(trades=0,events=0,roi=np.nan,ci_lo=np.nan,ci_hi=np.nan)
+    e=r.groupby('event_slug',observed=True).apply(lambda x:pd.Series(
+        {'pnl':(x.copy_roi*x.w).sum(),'w':x.w.sum()}),include_groups=False)
+    idx=np.random.default_rng(seed).integers(0,len(e),size=(n_boot,len(e)))
+    boots=e.pnl.to_numpy()[idx].sum(1)/e.w.to_numpy()[idx].sum(1)
+    return dict(trades=len(r),events=len(e),roi=float(e.pnl.sum()/e.w.sum()),
+        ci_lo=float(np.percentile(boots,2.5)),ci_hi=float(np.percentile(boots,97.5)))
+
+
+@pytest.mark.parametrize('stake',['equal','proportional'])
+def test_streamed_summary_exact_with_connected_markets_phases_closure_and_duplicate_index(stake):
+    from pmsports.wallets import skill
+    t=_connected_copy_fixture().sample(frac=1,random_state=5)
+    signals=t[(t.proxyWallet=='leader') & (t.timestamp==100)].copy()
+    signals.index=np.arange(len(signals))%2
+    signals['in_play']=np.arange(len(signals))%2==0
+    # Inconsistent signal metadata links a market to two events; do not split it.
+    signals['event_slug']=pd.Categorical(['x','y','x','z','x','y','q','q'],
+                                        categories=['z','y','x','q'])
+    signals=pd.concat([signals,signals.iloc[[0]].assign(q=-1),signals.iloc[[1]].assign(timestamp=1000)])
+    groups=_monolithic_wallet_groups(t)
+    groups['closed_ts']=groups['closed_ts'].copy()
+    groups['closed_ts'][t.condition_id.cat.categories.get_loc('d')]=102.
+    full=skill.copy_prices(t,signals,delays=(0,5,30,300),groups=groups,policies=(stake,))
+    for delay in (0,5,30,300):
+        result=skill.copy_summary(t,signals,delay,stake=stake,groups=groups,batch_orders=2,
+            phases=('all','pregame','in_play'),cash_details=True,diagnostic_move=True)
+        for phase in result:
+            part=full if phase=='all' else full.loc[full.in_play.eq(phase=='in_play')]
+            funded=skill.copy_returns(part,delay,stake=stake)
+            expected=_legacy_copy_summary(funded)
+            got={k:result[phase][k] for k in expected}
+            pd.testing.assert_series_equal(pd.Series(got),pd.Series(expected),check_exact=True)
+            assert result[phase]['pnl']==float((funded.copy_roi*funded.w).sum())
+            assert result[phase]['capital']==float(funded.w.sum())
+            assert result[phase]['in_play_share']==pytest.approx(float(funded.in_play.mean()),nan_ok=True)
+            prefix='' if stake=='equal' else 'prop_'
+            move=float((part[f'{prefix}q_d{delay}']-part.q).mean())
+            assert result[phase]['funded_move_5_10min']==pytest.approx(move,nan_ok=True)
+
+
+def test_bootstrap_chunking_and_narrow_reduction_are_exact_on_many_events():
+    from pmsports.wallets import skill
+    rng=np.random.default_rng(81)
+    n=10_000
+    # Several bootstrap chunks, with multiple rows/event and unequal tiny/large cash.
+    r=pd.DataFrame({'event_slug':pd.Categorical(np.arange(n)%1201),
+        'copy_roi':rng.normal(size=n),'w':10**rng.uniform(-9,4,n)})
+    for i in range(30):r[f'unused_audit_{i}']=np.arange(n)
+    assert skill.summarize_copy(r)==_legacy_copy_summary(r)
+
+
+def test_tape_universe_projection_filters_all_cached_ids_and_preserves_duplicates(tmp_path,monkeypatch):
+    from pmsports.wallets import tapes
+    tape_dir=tmp_path/'tapes';tape_dir.mkdir()
+    for cid in ('b','a','missing'):(tape_dir/f'{cid}.parquet').touch()
+    rows=[]
+    for cid,side in [('b',1),('unused',0),('a',0),('b',0),('a',1),('a',0)]:
+        row={c:0. for c in report.TAPE_UNIVERSE_COLUMNS}
+        row.update(condition_id=cid,outcome_idx=side,token_id=f'{cid}-{side}',family='soccer',
+            event_slug=f'event-{cid}',market_slug=f'market-{cid}',outcome=str(side))
+        rows.append(row)
+    u=pd.DataFrame(rows);u['unrelated_metadata']='unused-large-description'*1000
+    u.to_parquet(tmp_path/'universe.parquet',row_group_size=2,index=False)
+    monkeypatch.setattr(report,'OUT',tmp_path);monkeypatch.setattr(tapes,'TAPES',tape_dir)
+    expected=pd.read_parquet(tmp_path/'universe.parquet').loc[u.condition_id.isin(['a','b']),report.TAPE_UNIVERSE_COLUMNS].reset_index(drop=True)
+    got=report.load_tape_universe()
+    pd.testing.assert_frame_equal(got,expected,check_exact=True)
+    for p in tape_dir.glob('*.parquet'):p.unlink()
+    empty=report.load_tape_universe()
+    pd.testing.assert_frame_equal(empty,expected.iloc[:0],check_exact=True)
+
+
+def test_streamed_summary_retains_all_signals_with_bounded_audit_frames(monkeypatch):
+    from pmsports.wallets import skill
+    import weakref
+    # More rows than one audit batch, with two markets sharing each event.
+    n=60_000
+    t=pd.DataFrame({'condition_id':pd.Categorical(np.arange(n)%200),
+        'event_slug':pd.Categorical((np.arange(n)%200)//2),
+        'proxyWallet':pd.Categorical(np.where(np.arange(n)<n//2,'leader','other')),
+        'timestamp':np.arange(n,dtype=float),'size':np.full(n,10.),'q':np.full(n,.4),
+        'side_idx':np.zeros(n,dtype=np.int8),'y':np.ones(n),'fee_rate':np.full(n,.05),
+        'in_play':np.arange(n)%2==0,'family':pd.Categorical(['soccer']*n)})
+    signals=t.iloc[:n//2]
+    groups=skill.build_groups(t,meta=_far_future_meta(t))
+    seen=[];previous=[];original=skill.copy_prices
+    def capture(tape,rows,**kwargs):
+        assert all(ref() is None for ref in previous)
+        assert len(rows)<=1200
+        assert kwargs['delays']==(0,) and kwargs['policies']==('equal',)
+        seen.append(len(rows));out=original(tape,rows,**kwargs)
+        previous.append(weakref.ref(out))
+        return out
+    monkeypatch.setattr(skill,'copy_prices',capture)
+    summary=skill.copy_summary(t,signals,0,groups=groups,batch_orders=1200)
+    assert sum(seen)==len(signals) and len(seen)>1
+    assert set(summary)=={'all'} and all(np.isscalar(v) for v in summary['all'].values())
+
+
+def test_completed_family_and_walk_scopes_resume_without_replaying(monkeypatch):
+    base,meta=_mock_data();t=pd.concat([base]*20_000,ignore_index=True)
+    monkeypatch.setattr(report,'FAMILIES',['soccer'])
+    called=[];cache={}
+    def cached(name,fn):
+        if name not in cache:cache[name]=fn()
+        return cache[name]
+    def family(*args,**kw):
+        called.append(args[3])
+        return dict(n_p1_wallets=2,n_p2_wallets=3,n_both=1,n_tested=2,fdr_count=1,rho_z=.2,rho_roi=.3,
+            placebo=pd.DataFrame({'p2_roi':[.1,.2]}),rules=pd.DataFrame({'rule':['z']}),
+            deciles=pd.DataFrame(),s1=pd.DataFrame({'unneeded':[1]}),s2=pd.DataFrame({'unneeded':[2]}))
+    monkeypatch.setattr(study,'run',family)
+    split=pd.Timestamp(200,unit='s',tz='UTC').strftime('%Y-%m-%d %H:%M:%S')
+    expected=report._families(t,None,split,meta,cached=cached)
+    repeated=report._families(t,None,split,meta,cached=cached)
+    assert called==['ALL','soccer']
+    assert all('s1' not in value and 's2' not in value for value in cache.values())
+    for a,b in zip(expected,repeated):pd.testing.assert_frame_equal(a,b,check_exact=True)
+    called.clear()
+    def walk(*args,**kw):
+        called.append(len(args[0]));return pd.DataFrame({'month':['2025-01'],'trades':[1]})
+    monkeypatch.setattr(study,'walk_forward',walk)
+    expected=report._walk(base,'2025-01-01','2025-02-01',meta,cached=cached)
+    repeated=report._walk(base,'2025-01-01','2025-02-01',meta,cached=cached)
+    assert called==[len(base),len(base)]
+    pd.testing.assert_frame_equal(expected,repeated,check_exact=True)
+
+
+def test_streamed_components_use_tape_market_codes_for_missing_event_fallback():
+    from pmsports.wallets import skill
+    t=pd.DataFrame(dict(condition_id=pd.Categorical(['b','b','c','c'],categories=['unused','b','c']),
+        proxyWallet=pd.Categorical(['leader','other','leader','other']),
+        event_slug=pd.Categorical([None,None,1,1]),timestamp=[100.,101.,100.,101.],
+        size=[1000.]*4,q=[.5]*4,side_idx=[0]*4,y=[1.]*4,fee_rate=[0.]*4,
+        in_play=[False]*4,family=pd.Categorical(['soccer']*4)))
+    rows=t[t.proxyWallet=='leader'].copy()
+    rows['condition_id']=rows.condition_id.cat.remove_unused_categories()
+    groups=skill.build_groups(t,meta=_far_future_meta(t))
+    full=skill.copy_prices(t,rows,delays=(0,),policies=('equal',),groups=groups)
+    assert full.cost_usd_d0.tolist()==[100.,0.]
+    result=skill.copy_summary(t,rows,0,groups=groups,batch_orders=1,cash_details=True)['all']
+    assert result['capital']==100. and result['trades']==1

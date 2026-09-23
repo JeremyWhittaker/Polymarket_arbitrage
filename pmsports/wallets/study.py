@@ -68,7 +68,7 @@ def selections(s1: pd.DataFrame, lb: pd.DataFrame | None) -> dict[str, list[str]
 
 
 def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache: dict,
-             meta: pd.DataFrame | None = None) -> dict:
+             meta: pd.DataFrame | None = None, label: str = "selection") -> dict:
     ws = [w for w in wallets if w in s2.index]
     own = s2.loc[ws]
     out = {"selected": len(wallets), "active_p2": len(ws),
@@ -83,20 +83,16 @@ def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache:
         if "_groups" not in rows_cache:
             rows_cache["_groups"] = skill.build_groups(t2, meta=meta)
         summary = {}
-        # Every signal is still replayed. Keep only one delay's audit in memory,
-        # and retain small summaries across wallet selections rather than wide frames.
+        # Retain only per-event reductions, never an all-signal audit frame.
         for d in DELAYS:
-            policies = ("equal", "proportional") if d == 30 else ("equal",)
-            copied = skill.copy_prices(t2, rows, delays=(d,), groups=rows_cache["_groups"], policies=policies)
-            c = skill.summarize_copy(skill.copy_returns(copied, d, stake="equal"))
+            c = skill.copy_summary(t2, rows, d, groups=rows_cache["_groups"], label=label)['all']
             summary[f"copy_d{d}_roi"] = c["roi"]
             summary[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
             summary[f"copy_d{d}_trades"] = c["trades"]
             if d == 30:
-                c = skill.summarize_copy(skill.copy_returns(copied, d, stake="proportional"))
+                c = skill.copy_summary(t2, rows, d, stake="proportional", groups=rows_cache["_groups"], label=label)['all']
                 summary["copy_d30_prop_roi"] = c["roi"]
                 summary["copy_d30_prop_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
-            del copied
         rows_cache[key] = summary
     out.update(rows_cache[key])
     return out
@@ -148,11 +144,13 @@ def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str 
     cache: dict = {}
     table = []
     for name, ws in sel.items():
-        r = evaluate(t2, s2, ws, cache, meta=meta)
+        skill.log_progress(f'{label} rule={name} start', selected=len(ws), evaluation_fills=len(t2))
+        r = evaluate(t2, s2, ws, cache, meta=meta, label=f'{label} rule={name}')
         p1 = s1.loc[[w for w in ws if w in s1.index]]
         r.update({"rule": name, "p1_roi": float(p1.pnl.sum() / p1.staked.sum()) if len(p1) else np.nan,
                   "p1_median_z": float(p1.z.median()) if len(p1) else np.nan})
         table.append(r)
+        skill.log_progress(f'{label} rule={name} done', selected=len(ws))
     # the market as a whole: every P2 taker fill (what an average taker earns)
     everyone = {"rule": "all takers", "p2_roi": float(s2.pnl.sum() / s2.staked.sum()),
                 "p2_roi_net_fee": float(s2.pnl_net.sum() / s2.staked.sum()), "active_p2": len(s2)}
@@ -176,20 +174,21 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
         sub = t2[usd >= x]
         if sub.empty:
             continue
-        cp = skill.copy_prices(t2, sub, delays=tuple(dict.fromkeys((0,) + tuple(delays) + (300,))),
-                               groups=gb, policies=("equal",))
-        for phase, m in [("all", slice(None)), ("pregame", ~cp.in_play), ("in_play", cp.in_play)]:
-            part = cp[m] if not isinstance(m, slice) else cp
+        summaries = {d: skill.copy_summary(t2, sub, d, groups=gb, phases=("all","pregame","in_play"),
+                                           diagnostic_move=d == 300, label=f'bigtrade min_usd={x}')
+                     for d in dict.fromkeys((0,) + tuple(delays) + (300,))}
+        for phase, m in [("all", slice(None)), ("pregame", ~sub.in_play), ("in_play", sub.in_play)]:
+            part = sub[m] if not isinstance(m, slice) else sub
             rec = {"min_usd": x, "phase": phase, "trades": len(part),
                    "leader_roi": float(((part.y - part.q) * part["size"]).sum() / (part.q * part["size"]).sum())
                    if len(part) else np.nan}
             for d in (0,) + tuple(delays):
-                c = skill.summarize_copy(skill.copy_returns(part, d))
+                c = summaries[d][phase]
                 rec[f"copy_d{d}"] = c["roi"]
                 rec[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
             # This is conditional on an allocated later order, not an exact-time markout.
-            rec["funded_move_5_10min"] = float((part.q_d300 - part.q).mean())
-            rec["move_funded_signals"] = int(part.q_d300.notna().sum())
+            rec["funded_move_5_10min"] = summaries[300][phase]['funded_move_5_10min']
+            rec["move_funded_signals"] = summaries[300][phase]['move_funded_signals']
             rows.append(rec)
     return pd.DataFrame(rows)
 
@@ -226,23 +225,23 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
         picks = {"z": act.nlargest(TOP_K, "z").index, "whales": s.nlargest(TOP_K, "staked").index,
                  "random": act.index[rng.choice(len(act), size=min(TOP_K, len(act)), replace=False)]
                  if len(act) else act.index}
-        chosen = {r: nxt[nxt.proxyWallet.isin(picks[r])] for r in rules}
-        if not any(len(x) for x in chosen.values()):
+        if not any(len(picks[r]) for r in rules):
             continue
         # These are independent policies, not orders in one combined portfolio.
         # Reuse the immutable tape index, resetting liquidity for each policy.
         groups = skill.build_groups(nxt, meta=meta)
         for r in rules:
-            if chosen[r].empty:
+            chosen = nxt[nxt.proxyWallet.isin(picks[r])]
+            if chosen.empty:
                 continue
-            part = skill.copy_prices(nxt, chosen[r], delays=tuple(delays), groups=groups, policies=("equal",))
             for d in delays:
-                rr = skill.copy_returns(part, d)
-                if rr.empty:
+                c = skill.copy_summary(nxt, chosen, d, groups=groups, cash_details=True,
+                                       label=f'month={m0:%Y-%m} rule={r}')['all']
+                if not c['trades']:
                     continue
-                out.append({"month": m0.strftime("%Y-%m"), "rule": r, "delay": d, "trades": len(rr),
-                            "pnl_per_$1": float((rr.copy_roi * rr.w).sum()), "staked": float(rr.w.sum()),
-                            "in_play_share": float(rr.in_play.mean())})
+                out.append({"month": m0.strftime("%Y-%m"), "rule": r, "delay": d, "trades": c['trades'],
+                            "pnl_per_$1": c['pnl'], "staked": c['capital'],
+                            "in_play_share": c['in_play_share']})
     return pd.DataFrame(out)
 
 
@@ -257,13 +256,16 @@ def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30), meta
     rows = t2[t2.proxyWallet.isin(fdr)]
     mk = t2[t2.condition_id.isin(rows.condition_id.unique())]
     rows = mk[mk.proxyWallet.isin(fdr)]
-    cp = skill.copy_prices(mk, rows, delays=delays, meta=meta)
+    del t2
+    groups = skill.build_groups(mk, meta=meta)
+    summaries = {(stake,d): skill.copy_summary(mk, rows, d, stake=stake, groups=groups,
+                        phases=('all','pregame','in_play'), label='decomposition')
+                 for stake in ('proportional','equal') for d in delays}
     out = []
-    for phase, m in (("all", None), ("pregame", ~cp.in_play), ("in_play", cp.in_play)):
-        part = cp if m is None else cp[m]
+    for phase in ('all','pregame','in_play'):
         for stake in ("proportional", "equal"):
             for d in delays:
-                c = skill.summarize_copy(skill.copy_returns(part, d, stake=stake))
+                c = summaries[stake,d][phase]
                 out.append({"phase": phase, "stake": stake, "delay_s": d, "trades": c["trades"],
                             "copy_roi": c["roi"], "ci95": f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"})
     df = pd.DataFrame(out)

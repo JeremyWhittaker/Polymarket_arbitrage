@@ -160,7 +160,7 @@ def test_wallet_adapter_uses_settled_ranking_and_proportional_allocations(monkey
     u=pd.DataFrame(dict(condition_id=['old','unsettled','new','missing'],closed_ts=[led.SPLIT_TS-1,led.SPLIT_TS+1,led.SPLIT_TS+100,led.SPLIT_TS+100]))
     u=pd.concat([u.assign(outcome_idx=0,outcome='Away'),u.assign(outcome_idx=1,outcome='Home')],ignore_index=True)
     u['market_slug']=u.condition_id+'-market'
-    monkeypatch.setattr(pd,'read_parquet',lambda *a,**kw:u)
+    monkeypatch.setattr(report,'load_tape_universe',lambda:u)
     monkeypatch.setattr(tapes,'load_trades',lambda universe:wallet_tape())
     actual=skill.positions
     seen=[]
@@ -234,7 +234,7 @@ def test_wallet_report_exports_actual_usd_and_explains_reset(monkeypatch,tmp_pat
 def test_wallet_adapter_empty_selection_keeps_valid_empty_ledger(monkeypatch,tmp_path):
     from pmsports.wallets import skill,tapes
     u=pd.DataFrame(dict(condition_id=['old','unsettled','new','missing'],closed_ts=[led.SPLIT_TS-1,led.SPLIT_TS+1,led.SPLIT_TS+100,led.SPLIT_TS+100]))
-    monkeypatch.setattr(pd,'read_parquet',lambda *a,**kw:u)
+    monkeypatch.setattr(report,'load_tape_universe',lambda:u)
     monkeypatch.setattr(tapes,'load_trades',lambda universe:wallet_tape())
     monkeypatch.setattr(skill,'fdr_survivors',lambda z:pd.Series([],dtype=object))
     monkeypatch.setattr(led,'OUT',tmp_path)
@@ -321,7 +321,7 @@ def test_wallet_ledger_censors_closure_before_allocation_and_only_replays_propor
     from pmsports.wallets import skill,tapes,study
     u=pd.DataFrame(dict(condition_id=['old','unsettled','new','missing'],
         closed_ts=[led.SPLIT_TS-1,led.SPLIT_TS+1,led.SPLIT_TS+closed_offset,led.SPLIT_TS+100]))
-    monkeypatch.setattr(pd,'read_parquet',lambda *a,**kw:u)
+    monkeypatch.setattr(report,'load_tape_universe',lambda:u)
     monkeypatch.setattr(tapes,'load_trades',lambda universe:wallet_tape())
     monkeypatch.setattr(skill,'fdr_survivors',lambda _:pd.Series(['leader']))
     monkeypatch.setattr(study,'MIN_MKTS',1);monkeypatch.setattr(led,'OUT',tmp_path)

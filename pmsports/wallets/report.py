@@ -25,6 +25,27 @@ REPORTS = Path(__file__).resolve().parents[2] / "reports"
 FAMILIES = ["soccer", "tennis", "esports", "basketball", "baseball", "hockey", "american_football",
             "cricket", "mma_boxing"]
 SPLIT = "2026-01-01"
+TAPE_UNIVERSE_COLUMNS = ["condition_id", "outcome_idx", "token_id", "payout", "fee_rate",
+    "family", "event_slug", "game_start_ts", "closed_ts", "market_slug", "outcome"]
+
+
+def load_tape_universe() -> pd.DataFrame:
+    """Project only metadata used by the tapes, preserving file row/duplicate order.
+
+    Tape existence is the historical corpus definition, not a new market selection
+    rule. Predicate pushdown avoids loading millions of unrelated market outcomes.
+    """
+    from .tapes import TAPES
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    cids = sorted(p.stem for p in TAPES.glob('*.parquet'))
+    study.skill.log_progress('tape universe start', tape_markets=len(cids))
+    scanner = ds.dataset(OUT / 'universe.parquet', format='parquet').scanner(
+        columns=TAPE_UNIVERSE_COLUMNS, filter=ds.field('condition_id').isin(cids) if cids else ds.scalar(False),
+        batch_size=50_000, batch_readahead=1, fragment_readahead=1, use_threads=False)
+    u = pa.Table.from_batches(scanner.to_batches(), schema=scanner.projected_schema).to_pandas()
+    study.skill.log_progress('tape universe done', outcome_rows=len(u), markets=u.condition_id.nunique())
+    return u
 
 
 def _md(df, fmt=".3f"):
@@ -63,7 +84,7 @@ def get_code_hash():
 def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None = None) -> None:
     REPORTS.mkdir(exist_ok=True)
     walk_end = walk_end or pd.Timestamp.now(tz="UTC").strftime("%Y-%m-01")
-    u = pd.read_parquet(OUT / "universe.parquet")
+    u = load_tape_universe()
     meta = u.drop_duplicates("condition_id").set_index("condition_id")
     lb = pd.read_parquet(OUT / "leaderboard.parquet")
     t = load_trades(u)
@@ -89,20 +110,23 @@ def run(split: str = SPLIT, walk_start: str = "2025-07-01", walk_end: str | None
     def cached(name, fn):
         f = cache / f"{name}_{run_id}.pkl"
         if f.exists():
+            study.skill.log_progress(f'cache {name} hit')
             return pd.read_pickle(f)
+        study.skill.log_progress(f'cache {name} start')
         obj = fn()
         tmp = cache / f"{name}_{run_id}.pkl.{os.getpid()}.tmp"
         pd.to_pickle(obj, tmp)
         tmp.rename(f)
+        study.skill.log_progress(f'cache {name} done')
         return obj
 
-    fams, rules, decs = cached("families", lambda: _families(t, lb, split, meta))
+    fams, rules, decs = cached("families", lambda: _families(t, lb, split, meta, cached=cached))
     t2 = t[t.timestamp >= pd.Timestamp(split, tz="UTC").timestamp()]
     log.info("big-trade signal")
     big = cached("bigtrades", lambda: study.big_trade_signal(t2, meta=meta))
     del t2
     log.info("walk-forward")
-    wf = cached("walkforward", lambda: _walk(t, walk_start, walk_end, meta))
+    wf = cached("walkforward", lambda: _walk(t, walk_start, walk_end, meta, cached=cached))
     log.info("skilled-wallet decomposition")
     dec_sk = cached("skilled_decomp", lambda: study.decompose_skilled(t, split, meta=meta))
     wfa = _aggregate_walk(wf)
@@ -133,26 +157,33 @@ def _aggregate_walk(wf):
     return out[columns]
 
 
-def _walk(t, walk_start, walk_end, meta) -> pd.DataFrame:
-    wf = [study.walk_forward(t, walk_start, walk_end, delays=(0, 1, 5, 30), meta=meta).assign(scope="all"),
-          study.walk_forward(t[~t.in_play], walk_start, walk_end, rules=("z", "random"),
-                             delays=(0, 60, 300), meta=meta).assign(scope="pregame")]
+def _walk(t, walk_start, walk_end, meta, cached=None) -> pd.DataFrame:
+    cached = cached or (lambda name, fn: fn())
+    wf = [cached('walk_scope_all', lambda: study.walk_forward(t, walk_start, walk_end,
+                    delays=(0, 1, 5, 30), meta=meta)).assign(scope="all"),
+          cached('walk_scope_pregame', lambda: study.walk_forward(t[~t.in_play], walk_start, walk_end,
+                    rules=("z", "random"), delays=(0, 60, 300), meta=meta)).assign(scope="pregame")]
     for fam in ("soccer", "tennis", "basketball", "baseball", "esports", "hockey", "american_football"):
         tf = t[t.family == fam]
         if len(tf) > 100_000:
-            wf.append(study.walk_forward(tf, walk_start, walk_end, rules=("z", "random"),
-                                         delays=(0, 5, 30), meta=meta).assign(scope=fam))
+            wf.append(cached(f'walk_scope_{fam}', lambda: study.walk_forward(tf, walk_start, walk_end,
+                    rules=("z", "random"), delays=(0, 5, 30), meta=meta)).assign(scope=fam))
     parts = [w for w in wf if len(w)]
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
-def _families(t, lb, split, meta):
+def _families(t, lb, split, meta, cached=None):
+    cached = cached or (lambda name, fn: fn())
     fam_rows, rule_tables, deciles = [], [], []
     for fam in ["ALL"] + FAMILIES:
         tf = t if fam == "ALL" else t[t.family == fam]
         if tf.timestamp.min() >= pd.Timestamp(split, tz="UTC").timestamp() or len(tf) < 50_000:
             continue
-        r = study.run(tf, split, lb if fam == "ALL" else None, fam, meta=meta)
+        def family_result():
+            r = study.run(tf, split, lb if fam == "ALL" else None, fam, meta=meta)
+            # Persist report evidence, not the large intermediate wallet-stat frames.
+            return {k:v for k,v in r.items() if k not in ('s1','s2')}
+        r = cached(f'family_{fam}', family_result)
         plc = r["placebo"]
         fam_rows.append({"family": fam, "fills": len(tf), "p1_wallets": r["n_p1_wallets"],
                          "p2_wallets": r["n_p2_wallets"], "active_both": r["n_both"],

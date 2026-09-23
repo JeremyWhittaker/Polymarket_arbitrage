@@ -386,8 +386,9 @@ def mlb_fair_value_ledger(threshold=.02):
 
 def copy_wallets_ledger(delay=30):
     from ..wallets import skill,study
+    from ..wallets.report import load_tape_universe
     from ..wallets.tapes import load_trades
-    u = pd.read_parquet(DATA_DIR / "wallets" / "universe.parquet")
+    u = load_tape_universe()
     meta = u.drop_duplicates("condition_id").set_index("condition_id")
     t = skill.valid_trades(load_trades(u))
     s1 = skill.wallet_stats(skill.positions(t[study._causal_cutoff(t,SPLIT_TS,meta)]))
@@ -395,7 +396,11 @@ def copy_wallets_ledger(delay=30):
     t2 = t[t.timestamp >= SPLIT_TS]
     selected = t2[t2.proxyWallet.isin(fdr)]
     mk = t2[t2.condition_id.isin(selected.condition_id.unique())]
+    # Replay needs only selected signals and their complete market tapes. Drop
+    # the much larger source/evaluation frames before allocating the audit.
+    del t, t2, s1
     cp = skill.copy_prices(mk,selected,delays=(delay,),meta=meta,policies=("proportional",))  # all selected signals
+    del mk, selected
     pref = "prop_"
     def col(name):
         return cp[f"{pref}{name}_d{delay}"]
@@ -415,6 +420,7 @@ def copy_wallets_ledger(delay=30):
         exit_ts=cp.condition_id.map(meta.closed_ts).astype(float).where(filled),
         exit_price=cp.y.where(filled),reference_price=cp.q,
         note="Causal FDR selection; proportional1% leader-notional target capped100/event; all no-fills retained; condition="+cp.condition_id.astype(str)))
+    del cp, price, filled, sides, labels
     return _write(_meta("copy_skilled_wallets","Copy historically selected wallets: capped proportional policy",
         "pmsports/wallets/skill.py","reports/WALLETS.md",
         f"Rank prior trades using pre2026 Gamma closure as an outcome-availability proxy; FDR survivors with >={study.MIN_MKTS}markets; first later other-wallet same-side print strictly after{delay}s and before analytical closure;1% leader notional capped100/order/event",
