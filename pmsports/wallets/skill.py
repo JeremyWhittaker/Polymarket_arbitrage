@@ -41,7 +41,7 @@ def valid_trades(t: pd.DataFrame) -> pd.DataFrame:
 POSITION_BATCH_ROWS = 250_000
 
 
-def _market_batches(t: pd.DataFrame, batch_rows: int):
+def _market_row_batches(t: pd.DataFrame, batch_rows: int):
     """Complete markets, stable within each market; never split a wallet-market group.
 
     The loader and its time-filtered subsets are already market ordered. Unsorted
@@ -65,11 +65,16 @@ def _market_batches(t: pd.DataFrame, batch_rows: int):
     begin = previous = 0
     for end in boundaries:
         if end - begin > batch_rows and previous > begin:
-            yield t.iloc[begin:previous] if order is None else t.iloc[order[begin:previous]]
+            yield slice(begin, previous) if order is None else order[begin:previous]
             begin = previous
         previous = end
     if previous > begin:
-        yield t.iloc[begin:previous] if order is None else t.iloc[order[begin:previous]]
+        yield slice(begin, previous) if order is None else order[begin:previous]
+
+
+def _market_batches(t: pd.DataFrame, batch_rows: int):
+    for rows in _market_row_batches(t, batch_rows):
+        yield t.iloc[rows]
 
 
 def positions(t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS) -> pd.DataFrame:
@@ -190,13 +195,98 @@ def fdr_survivors(z: pd.Series, alpha: float = 0.05) -> pd.Series:
 
 # ----------------------------------------------------------------------------- copy execution
 
-def build_groups(t: pd.DataFrame) -> dict:
-    """Reusable normalized tape index; raw row identity preserves shared liquidity."""
-    tape = pd.DataFrame({"m": t.condition_id.cat.codes.to_numpy(), "s": t.side_idx.to_numpy(),
-                         "ts": t.timestamp.to_numpy(float), "q": t.q.to_numpy(float),
-                         "size": t["size"].to_numpy(float), "fee_rate": t.fee_rate.to_numpy(float),
-                         "w": t.proxyWallet.cat.codes.to_numpy()})
-    return {"replay": TapeReplay(tape), "wcat": t.proxyWallet.cat.categories,
+class _WalletTapeReplay(TapeReplay):
+    """Compact cached index, bounded constructor and independent order batches.
+
+    The shared engine still validates/sorts each complete market and executes every
+    order. Its numeric index arrays are populated directly, avoiding full-corpus
+    DataFrame conversions/deduplication/sorts. Replay batches keep all orders linked
+    by a market OR an event together, including inconsistent event metadata.
+    """
+
+    def __init__(self, t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS):
+        if not isinstance(batch_rows, (int, np.integer)) or batch_rows < 1:
+            raise ValueError("batch_rows must be a positive integer")
+        arrays = {name: np.empty(len(t), dtype=dtype) for name, dtype in (
+            ("m", t.condition_id.cat.codes.dtype), ("s", t.side_idx.dtype),
+            ("ts", float), ("q", float), ("size", float),
+            ("w", t.proxyWallet.cat.codes.dtype), ("fee_rate", float), ("print_id", np.int64))}
+        self.groups = {}
+        offset = 0
+        for rows in _market_row_batches(t, batch_rows):
+            batch = t.iloc[rows]
+            ids = np.arange(rows.start, rows.stop) if isinstance(rows, slice) else rows
+            tape = pd.DataFrame({"m": batch.condition_id.cat.codes.to_numpy(),
+                "s": batch.side_idx.to_numpy(), "ts": batch.timestamp.to_numpy(float),
+                "q": batch.q.to_numpy(float), "size": batch["size"].to_numpy(float),
+                "fee_rate": batch.fee_rate.to_numpy(float),
+                "w": batch.proxyWallet.cat.codes.to_numpy(), "print_id": ids}, copy=False)
+            replay = TapeReplay(tape)
+            end = offset + len(replay.tape)
+            for name, values in arrays.items():
+                values[offset:end] = replay.tape[name].to_numpy()
+            self.groups.update({key: (a + offset, b + offset) for key, (a, b) in replay.groups.items()})
+            offset = end
+            del replay, tape, batch
+        self.tape = pd.DataFrame({name: values[:offset] for name, values in arrays.items()}, copy=False)
+        self.ts, self.q = self.tape.ts.to_numpy(), self.tape.q.to_numpy()
+        self.size, self.rate = self.tape["size"].to_numpy(), self.tape.fee_rate.to_numpy()
+        self.w, self.ids = self.tape.w.to_numpy(), self.tape.print_id.to_numpy()
+
+    @staticmethod
+    def order_batches(orders: pd.DataFrame, batch_orders: int = 25_000):
+        """Stable original order inside complete market/event connected components."""
+        parent, by_event = {}, {}
+
+        def root(m):
+            parent.setdefault(m, m)
+            while parent[m] != m:
+                parent[m] = parent[parent[m]]
+                m = parent[m]
+            return m
+
+        for start in range(0, len(orders), batch_orders):
+            block = orders.iloc[start:start + batch_orders]
+            pairs = (block[["m", "event"]] if "event" in block else block[["m"]].assign(event=block.m)).drop_duplicates()
+            for m, event in pairs.itertuples(index=False, name=None):
+                event = m if pd.isna(event) else event
+                a, b = root(m), root(by_event.setdefault(event, m))
+                parent[a] = b
+        roots = {m: root(m) for m in parent}
+        labels = {r: i for i, r in enumerate(dict.fromkeys(roots.values()))}
+        codes = np.fromiter((labels[roots[m]] for m in orders.m.to_numpy()), dtype=np.int32, count=len(orders))
+        order = np.argsort(codes, kind="stable")
+        counts = np.bincount(codes, minlength=len(labels))
+        result, start, end = [], 0, 0
+        for count in counts:
+            if end > start and end + count - start > batch_orders:
+                result.append(order[start:end])
+                start = end
+            end += int(count)
+        if end > start:
+            result.append(order[start:end])
+        return result
+
+    def replay(self, orders: pd.DataFrame, *, batches=None, **kwargs) -> pd.DataFrame:
+        batches = self.order_batches(orders) if batches is None else batches
+        if not batches:
+            return TapeReplay.replay(self, orders, **kwargs)
+        columns = None
+        for rows in batches:
+            result = TapeReplay.replay(self, orders.iloc[rows], **kwargs)
+            if columns is None:
+                dtypes = result.dtypes
+                columns = {name: np.empty(len(orders), dtype=values.to_numpy().dtype)
+                           for name, values in result.items()}
+            for name, values in result.items():
+                columns[name][rows] = values.to_numpy()
+        return pd.DataFrame({name: pd.Series(values, dtype=dtypes[name], copy=False)
+                             for name, values in columns.items()}, copy=False)
+
+
+def build_groups(t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS) -> dict:
+    """Reusable complete-market index; raw positional identity preserves liquidity."""
+    return {"replay": _WalletTapeReplay(t, batch_rows=batch_rows), "wcat": t.proxyWallet.cat.categories,
             "mcat": t.condition_id.cat.categories}
 
 
@@ -215,11 +305,12 @@ def copy_prices(t: pd.DataFrame, rows: pd.DataFrame, delays=(0, 5, 30, 60), hori
         "signal_ts": rows.timestamp.to_numpy(float), "leader_w": gb["wcat"].get_indexer(rows.proxyWallet),
         "event": rows.event_slug.to_numpy(), "y": rows.y.to_numpy(float)})
     valid = valid_trade_mask(rows).to_numpy()
+    batches = {"batches": gb["replay"].order_batches(orders)} if isinstance(gb["replay"], _WalletTapeReplay) else {}
     for d in delays:
         for name, budget in (("", np.full(len(rows), 100.)),
                              ("prop_", np.minimum(100., .01 * rows["size"].to_numpy() * rows.q.to_numpy()))):
             result = gb["replay"].replay(orders.assign(budget_usd=np.where(valid,budget,0.)), delay_s=d,
-                                        horizon_s=horizon, event_cap_usd=100.)
+                                        horizon_s=horizon, event_cap_usd=100., **batches)
             extra[f"{name}q_d{d}"] = result.entry_price.to_numpy()
             for col in ("signal_ts", "receipt_ts", "eligible_ts", "expiry_ts", "fill_ts", "print_id", "shares",
                         "stake_usd", "fee_usd", "cost_usd", "payout", "pnl_usd", "roi", "status"):

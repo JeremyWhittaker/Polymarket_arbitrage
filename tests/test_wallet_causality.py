@@ -364,3 +364,104 @@ def test_batched_positions_preserve_empty_and_invalid_schema():
         pd.testing.assert_frame_equal(skill.wallet_stats(got),skill.wallet_stats(expected),check_exact=True)
     with pytest.raises(ValueError,match='positive integer'):
         skill.positions(t,batch_rows=0)
+
+
+def _monolithic_wallet_groups(t):
+    """Original full-table constructor, retained as the exact replay oracle."""
+    from pmsports.execution import TapeReplay
+    tape = pd.DataFrame({'m': t.condition_id.cat.codes.to_numpy(), 's': t.side_idx.to_numpy(),
+        'ts': t.timestamp.to_numpy(float), 'q': t.q.to_numpy(float),
+        'size': t['size'].to_numpy(float), 'fee_rate': t.fee_rate.to_numpy(float),
+        'w': t.proxyWallet.cat.codes.to_numpy()})
+    return {'replay': TapeReplay(tape), 'wcat': t.proxyWallet.cat.categories,
+            'mcat': t.condition_id.cat.categories}
+
+
+def _connected_copy_fixture():
+    rows = []
+    for market, event in [('a','shared'), ('b','shared'), ('c','separate'), ('d','alone')]:
+        for ts, wallet, size, q, side in [(100,'leader',1000,.5,0),
+            (100,'leader',1000,.5,0), (101,'leader',1000,.55,0),
+            (102,'other',2,.55,0), (102,'other',3,.6,0),
+            (104,'other',1000,.6,0), (106,'other',1000,.7,0),
+            (131,'other',1000,.8,0), (161,'other',1000,.9,0),
+            (401,'other',1000,.9,0), (102,'other',1000,.1,1),
+            (103,'other',-1,.5,0), (103,'other',1,-.5,0)]:
+            rows.append(dict(timestamp=float(ts),condition_id=market,proxyWallet=wallet,
+                size=float(size),side_idx=side,q=q,y=float(market in ['a','c']),fee_rate=.05,
+                in_play=True,family='soccer',event_slug=event))
+    t = pd.DataFrame(rows)
+    for col in ('condition_id','proxyWallet','family','event_slug'):
+        t[col] = t[col].astype('category')
+    return t
+
+
+@pytest.mark.parametrize('unsorted', [False, True])
+def test_bounded_wallet_index_and_copy_match_monolithic(unsorted, monkeypatch):
+    from pmsports.wallets import skill
+    from pmsports.execution import TapeReplay
+    t = _connected_copy_fixture()
+    if unsorted:
+        t = t.sample(frac=1, random_state=12)
+    t.index = np.arange(len(t)) % 3
+    reference = _monolithic_wallet_groups(t)
+    built = []; original_init = TapeReplay.__init__
+    def record_init(self, tape):
+        built.append(len(tape))
+        assert len(tape) <= 15
+        original_init(self, tape)
+    monkeypatch.setattr(TapeReplay, '__init__', record_init)
+    groups = skill.build_groups(t, batch_rows=15)
+    assert len(built) == 4
+    pd.testing.assert_frame_equal(groups['replay'].tape, reference['replay'].tape, check_exact=True)
+    assert groups['replay'].groups == reference['replay'].groups
+    signals = t[(t.proxyWallet == 'leader') & (t.timestamp == 100)].copy()
+    # Retain a corrupt and a no-fill order in their original audit positions.
+    signals = pd.concat([signals, signals.iloc[[0]].assign(q=-1),
+                         signals.iloc[[0]].assign(timestamp=1000)])
+    plan = skill._WalletTapeReplay.order_batches
+    monkeypatch.setattr(skill._WalletTapeReplay, 'order_batches',
+                        staticmethod(lambda orders: plan(orders, batch_orders=2)))
+    expected = skill.copy_prices(t, signals, delays=(0,5,30,60,300), groups=reference)
+    got = skill.copy_prices(t, signals, delays=(0,5,30,60,300), groups=groups)
+    pd.testing.assert_frame_equal(got, expected, check_exact=True)
+    statuses = set(got.status_d0) | set(got.status_d5)
+    assert {'partial','event_cap','ineligible','unfilled'} <= statuses
+    assert got.groupby('event_slug', observed=True).cost_usd_d0.sum().max() <= 100.00000001
+    # All policies/delays reuse the constructed index; none rebuilds a market.
+    assert len(built) == 4
+
+
+def test_order_components_preserve_cross_event_liquidity_and_cap_priority():
+    from pmsports.wallets import skill
+    t = _connected_copy_fixture()
+    reference = _monolithic_wallet_groups(t)['replay']
+    replay = skill.build_groups(t, batch_rows=15)['replay']
+    # a links x/y and c links y/z: all three markets must stay together even
+    # though event labels disagree with source metadata. Missing event falls back to m.
+    orders = pd.DataFrame(dict(m=[0,0,1,2,2,3],s=[0]*6,
+        event=['x','y','x','y','z',None],signal_ts=[100.]*6,
+        leader_w=[t.proxyWallet.cat.categories.get_loc('leader')]*6,
+        y=[1.]*6,budget_usd=[100.]*6),index=[4,4,2,2,1,1])
+    batches = replay.order_batches(orders, batch_orders=2)
+    assert len(batches) == 2 and batches[0].tolist() == [0,1,2,3,4]
+    for delay in (0,5,30,300):
+        expected = reference.replay(orders, delay_s=delay, horizon_s=300, event_cap_usd=100)
+        got = replay.replay(orders, batches=batches, delay_s=delay, horizon_s=300, event_cap_usd=100)
+        pd.testing.assert_frame_equal(got, expected, check_exact=True)
+    # Explicit per-order expiry, eligibility and unknown-fee statuses are also unchanged.
+    orders = orders.assign(receipt_ts=[99.,100.,100.,100.,100.,100.],
+        expiry_ts=[102.,103.,102.,102.,102.,102.],budget_usd=[100.,0.,100.,100.,100.,100.])
+    pd.testing.assert_frame_equal(replay.replay(orders,batches=batches),reference.replay(orders),check_exact=True)
+
+
+def test_bounded_wallet_index_empty_and_invalid_prints():
+    from pmsports.wallets import skill
+    t = _connected_copy_fixture()
+    for tape in (t.iloc[:0], t.assign(q=-1), t.assign(fee_rate=np.nan)):
+        reference = _monolithic_wallet_groups(tape)
+        groups = skill.build_groups(tape, batch_rows=15)
+        pd.testing.assert_frame_equal(groups['replay'].tape,reference['replay'].tape,check_exact=True)
+        for rows in (t.iloc[:0],t.iloc[[0,1]]):
+            pd.testing.assert_frame_equal(skill.copy_prices(tape,rows,delays=(0,),groups=groups),
+                skill.copy_prices(tape,rows,delays=(0,),groups=reference),check_exact=True)
