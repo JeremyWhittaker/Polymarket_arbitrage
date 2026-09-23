@@ -7,6 +7,7 @@ import threading
 import time
 
 import pytest
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from pmsports.webapp import server
@@ -38,6 +39,9 @@ def isolated_ledgers(monkeypatch, tmp_path):
     ledger_dir.mkdir()
     monkeypatch.setattr(server, "LEDGERS", ledger_dir)
     monkeypatch.setattr(server, "INDEX", ledger_dir / "_index.json")
+    monkeypatch.setattr(server, "MARKETS", tmp_path / "markets.parquet")
+    with server._market_lock:
+        server._market_cache.clear()
     with server._lock:
         server._cache.clear()
     yield ledger_dir
@@ -247,3 +251,125 @@ def test_no_fill_audits_do_not_count_as_bets_and_arbitrary_periods_work():
     result = server._calc_kpis(frame)
     assert result['historical_capture']['bets'] == 1
     assert result['historical_capture']['roi'] == -1/10.25
+
+
+def test_empty_declared_sport_has_zero_membership_without_invented_metrics(isolated_ledgers):
+    for slug, sport in [("empty-football", "nfl"), ("empty-other", "cricket"),
+                        ("empty-multi", "multi"), ("empty-unknown", "unknown")]:
+        doc = ledger(slug)
+        doc.update(rows=[], n_total_trades=0, sport=sport)
+        put(isolated_ledgers, doc)
+    index = client.get("/api/index").json()
+    strategies = {d["slug"]: d for d in index["strategies"]}
+    assert strategies["empty-football"]["sport_counts"] == {"american_football": 0}
+    assert strategies["empty-other"]["sport_counts"] == {"other": 0}
+    assert strategies["empty-multi"]["sport_counts"] == strategies["empty-unknown"]["sport_counts"] == {}
+    assert {t["key"]: t["trades"] for t in index["tabs"]} == {"all": 0, "american_football": 0, "other": 0}
+    meta = client.get("/api/strategy/empty-football").json()
+    assert meta["sports"] == ["american_football"]
+    assert meta["by_sport"] == [{"sport": "american_football", "trades": 0, "pnl": 0., "roi": None}]
+    rows = client.get("/api/strategy/empty-football/trades?sport=american_football").json()
+    assert rows["rows"] == [] and rows["total"] == rows["fills"] == 0
+    assert rows["roi"] is None and rows["kpis"] == {}
+    assert client.get("/api/strategy/empty-football/equity?sport=american_football").json()["points"] == []
+
+
+def compact_doc(slug="compact", whale=False):
+    doc = ledger(slug)
+    row = dict(zip(doc["columns"], doc["rows"][0]))
+    row.update(event=999, market=42, side=1)
+    if whale:
+        row.update(m=row.pop("market"), s=row.pop("side"), y=1., signal_ts=99.)
+        for field in ("exit_ts", "exit_price", "date"):
+            row.pop(field)
+    doc.update(columns=list(row), rows=[list(row.values())], n_total_trades=1,
+               code_path="pmsports/analysis/" + ("whale_prices.py" if whale else "calibration.py"))
+    return doc
+
+
+def market_mapping(**kwargs):
+    row = dict(m=42, event_slug="away-home-2026-09-01", market_slug="away-home-moneyline",
+               o0="Home Team", o1="Away Team", closed_ts=500.)
+    row.update(kwargs)
+    pd.DataFrame([row]).to_parquet(server.MARKETS, index=False)
+
+
+def api_rows(slug="compact", params=""):
+    response = client.get(f"/api/strategy/{slug}/trades{params}")
+    assert response.status_code == 200, response.text
+    page = response.json()
+    return [dict(zip(page["columns"], r)) for r in page["rows"]]
+
+
+def test_compact_labels_use_exact_outcome_and_keep_raw_codes(isolated_ledgers):
+    market_mapping()
+    put(isolated_ledgers, compact_doc())
+    row = api_rows()[0]
+    assert (row["event"], row["market"], row["side"]) == ("away-home-2026-09-01", "away-home-moneyline", "Away Team")
+    assert (row["market_code"], row["event_code"], row["side_code"]) == (42, 999, 1)
+    assert len(api_rows(params="?q=moneyline")) == 1
+    assert len(api_rows(params="?q=Away%20Team")) == 1
+    assert row["stake_usd"] == 100 and row["fee_usd"] == 1 and row["pnl_usd"] == 10
+    doc = compact_doc("ordinary")
+    doc["code_path"] = "pmsports/research/other.py"
+    put(isolated_ledgers, doc)
+    original = api_rows("ordinary")[0]
+    assert (original["event"], original["market"], original["side"]) == (999, 42, 1)
+    assert "market_code" not in original
+
+
+def test_whale_resolution_and_no_fill_clock_are_not_fabricated(isolated_ledgers):
+    market_mapping()
+    doc = compact_doc(whale=True)
+    row = dict(zip(doc["columns"], doc["rows"][0]))
+    row.update(entry_ts=None, entry_price=None, stake_usd=0., fee_usd=0., payout=0., pnl_usd=0., status="unfilled")
+    doc.update(columns=list(row), rows=[list(row.values())])
+    put(isolated_ledgers, doc)
+    shown = api_rows()[0]
+    assert shown["m"] == shown["market_code"] == 42 and shown["s"] == shown["side_code"] == 1
+    assert shown["side"] == "Away Team" and shown["exit_ts"] == 500 and shown["exit_price"] == 1
+    assert shown["entry_ts"] is None and shown["entry_price"] is None and shown["date"] == "1970-01-01"
+    assert all(shown[c] == 0 for c in ("stake_usd", "fee_usd", "payout", "pnl_usd"))
+
+
+def test_mapping_lifecycle_invalidates_display_and_index_without_ledger_edits(isolated_ledgers, monkeypatch):
+    path = put(isolated_ledgers, compact_doc())
+    ledger_identity = (path.stat().st_mtime_ns, path.stat().st_size)
+    assert api_rows()[0]["event"] == "Event unavailable"
+    market_mapping()
+    assert api_rows()[0]["side"] == "Away Team"
+    client.get("/api/index")
+    reads = []
+    original = server._read_ledger
+    monkeypatch.setattr(server, "_read_ledger", lambda p: (reads.append(p.name), original(p))[1])
+    client.get("/api/index")
+    assert reads == []
+    market_mapping(o1="Renamed Outcome")
+    assert api_rows()[0]["side"] == "Renamed Outcome"
+    reads.clear()
+    client.get("/api/index")
+    assert reads == ["compact.json"]
+    server.MARKETS.unlink()
+    assert api_rows()[0]["side"] == "Outcome unavailable"
+    server.MARKETS.write_text("malformed parquet")
+    assert api_rows()[0]["market"] == "Market unavailable"
+    assert (path.stat().st_mtime_ns, path.stat().st_size) == ledger_identity
+
+
+def test_unknown_and_ambiguous_mapping_never_guesses_side(isolated_ledgers):
+    market_mapping()
+    doc = compact_doc()
+    side_idx, market_idx = doc["columns"].index("side"), doc["columns"].index("market")
+    doc["rows"][0][side_idx] = 2
+    put(isolated_ledgers, doc)
+    assert api_rows()[0]["side"] == "Outcome unavailable"
+    doc["rows"][0][side_idx] = 0
+    doc["rows"][0][market_idx] = 123456
+    put(isolated_ledgers, doc)
+    assert api_rows()[0]["event"] == "Event unavailable"
+    doc["rows"][0][market_idx] = 42
+    put(isolated_ledgers, doc)
+    assert api_rows()[0]["side"] == "Home Team"
+    mapping = pd.read_parquet(server.MARKETS)
+    pd.concat([mapping, mapping.assign(o0="Conflicting Team")]).to_parquet(server.MARKETS, index=False)
+    assert api_rows()[0]["side"] == "Outcome unavailable"

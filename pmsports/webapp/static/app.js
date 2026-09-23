@@ -17,7 +17,7 @@
   function inTab(d) {
     if (S.tab === "all") return true;
     var c = d.sport_counts || {};
-    return (c[S.tab] || 0) > 0;
+    return Object.prototype.hasOwnProperty.call(c, S.tab);
   }
 
   function renderTabs() {
@@ -144,7 +144,7 @@
       S.meta.periods.map(function (p) { return '<option value="' + esc(p) + '"' + (p === S.period ? " selected" : "") + ">" + esc(p) + "</option>"; }).join("") + "</select>" +
       '<label class="f" for="fs">Sport</label><select id="fs">' + sportOpts + "</select>" +
       '<label class="f" for="fr">Result</label><select id="fr"><option value="all">All</option><option value="win">Winners</option><option value="loss">Losers</option><option value="void">Voids</option></select>' +
-      '<input type="search" id="fq" placeholder="Search event, side, note" style="flex:1;min-width:150px">' +
+      '<input type="search" id="fq" placeholder="Search event, market, side, note" style="flex:1;min-width:150px">' +
       "</div>" +
       '<div class="table-scroll"><table><thead><tr>' +
       th("#", "id") + th("Date", "date") + '<th>Event</th><th>Side bought</th>' + th("Entry", "entry_price", 1) +
@@ -193,21 +193,26 @@
     $("prev").disabled = p.offset <= 0; $("next").disabled = p.offset + p.limit >= p.total;
     $("tb").innerHTML = p.rows.map(function (r) {
       var open = S.open === r[c.id];
+      var market = r[c.market], event = r[c.event];
+      var marketText = market && market !== event ? '<div class="muted">' + esc(market) + '</div>' : '';
       var exitTxt = r[c.exit_kind] === "resolution"
         ? (r[c.exit_price] === 1 ? "won" : r[c.exit_price] === 0 ? "lost" : "void " + cents(r[c.exit_price]))
         : esc(r[c.exit_kind]) + " " + cents(r[c.exit_price]);
       if (!(Number(r[c.stake_usd]) + Number(r[c.fee_usd]) > 0)) exitTxt = esc(r[c.status] || "no position");
       var row = '<tr class="t" data-id="' + r[c.id] + '" aria-expanded="' + open + '">' +
         '<td class="num">' + r[c.id] + "</td><td class=\"num\">" + esc(r[c.date]) + "</td>" +
-        '<td class="wrap">' + esc(r[c.event]) + '</td><td class="wrap">' + esc(r[c.side]) + "</td>" +
+        '<td class="wrap">' + esc(event) + marketText + '</td><td class="wrap">' + esc(r[c.side]) + "</td>" +
         '<td class="r num">' + cents(r[c.entry_price]) + '</td><td class="r num">' + usd(r[c.stake_usd]) + "</td>" +
         '<td class="r num">' + (r[c.fee_usd] ? usd(r[c.fee_usd]) : "–") + "</td><td>" + exitTxt + "</td>" +
         '<td class="r num">' + usd(r[c.payout]) + '</td><td class="r num ' + sgn(r[c.pnl_usd]) + '">' + usd(r[c.pnl_usd]) + "</td>" +
         '<td class="r num ' + sgn(r[c.roi_deployed]) + '">' + pct(r[c.roi_deployed]) + "</td></tr>";
       if (!open) return row;
       var shares = r[c.entry_price] ? (r[c.stake_usd] / r[c.entry_price]).toFixed(1) : "–";
+      var codes = ['market_code', 'event_code', 'side_code'].filter(function (key) { return c[key] != null && r[c[key]] != null; }).map(function (key) {
+        return key.replace('_code', '') + ' ' + esc(r[c[key]]);
+      }).join(' · ');
       return row + '<tr class="detail"><td colspan="11"><div class="walk">' +
-        "<div><h4>Signal</h4><p>" + esc(r[c.note] || "—") + "</p></div>" +
+        "<div><h4>Signal</h4><p>" + esc(r[c.note] || "—") + "</p>" + (codes ? '<p class="muted">Source IDs: ' + codes + '</p>' : '') + "</div>" +
         '<div><h4>Entered</h4><p class="big">' + cents(r[c.entry_price]) + " per share</p><p>" + when(r[c.entry_ts]) +
         " · " + usd(r[c.stake_usd]) + " = " + shares + " shares" + (r[c.fee_usd] ? " · fee " + usd(r[c.fee_usd]) : " · no taker fee") + "</p></div>" +
         '<div><h4>Exited</h4><p class="big">' + esc(r[c.exit_kind]) + " at " + cents(r[c.exit_price]) + "</p><p>" +
