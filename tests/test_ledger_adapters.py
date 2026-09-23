@@ -59,7 +59,26 @@ def test_favorite_adapters_use_actual_partial_cash_and_keep_no_fill(tmp_path,mon
     assert pd.isna(d.entry_ts.iloc[1]) and d.cost_usd.iloc[1]==0
     assert d.roi.iloc[0]==pytest.approx(d.pnl_usd.iloc[0]/d.cost_usd.iloc[0])
     assert doc['headline']['dev']['roi']==pytest.approx(d.pnl_usd.sum()/d.cost_usd.sum())
-    assert d.exit_ts.tolist()==[1000,1100]
+    assert d.exit_ts.iloc[0]==1000 and pd.isna(d.exit_ts.iloc[1])
+    assert pd.isna(d.exit_price.iloc[1]) and d.exit_kind.iloc[1]=='unfilled'
+
+
+@pytest.mark.parametrize('side,entry', [('favorite',104.),('underdog',105.)])
+@pytest.mark.parametrize('closure_offset,filled', [(1.,True),(0.,False),(-1.,False),(np.nan,False)])
+def test_pregame_closure_censors_capacity_without_dropping_void_signal(tmp_path,monkeypatch,side,entry,closure_offset,filled):
+    source=pregame().iloc[:1].assign(closed_ts=entry+closure_offset,y0=.5,y1=.5)
+    monkeypatch.setattr(led,'OUT',tmp_path)
+    monkeypatch.setattr(led,'cached_pregame_prices',lambda:source)
+    d=frame(led.favorites_ledger(side))
+    assert len(d)==1 and d.signal_ts.iloc[0]==100.
+    assert bool(d.cost_usd.iloc[0]>0)==filled
+    if filled:
+        assert d.entry_ts.iloc[0]<d.expiry_ts.iloc[0]==d.exit_ts.iloc[0]
+        assert d.pnl_usd.iloc[0]==pytest.approx(d.payout.iloc[0]-d.cost_usd.iloc[0])
+    else:
+        assert d[['entry_ts','entry_price','exit_ts','exit_price','roi']].isna().all().all()
+        assert d[['shares','stake_usd','fee_usd','cost_usd','payout','pnl_usd']].eq(0).all().all()
+        assert d.status.iloc[0]==d.exit_kind.iloc[0]=='unfilled'
 
 
 def test_favorite_adapter_rejects_legacy_cache_and_bad_clock(monkeypatch):

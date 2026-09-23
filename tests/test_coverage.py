@@ -131,7 +131,7 @@ def test_favorite_decision_does_not_see_future_liquidity_and_caps_first_entry(tm
     assert q['p0'] == .6 and q['n_fills'] == 3
     assert q['ask0'] == .7 and q['entry_size0'] == 2 and q['entry_ts0'] == 9406
     m = pd.DataFrame([{**q, 'o0':'A','o1':'B','y0':1.,'y1':0.,'fee_rate':.05,
-                       'game_start_ts':start,'market_slug':'a','event_slug':'game'}])
+                       'game_start_ts':start,'closed_ts':start+1000,'market_slug':'a','event_slug':'game'}])
     b=favorite_bets(m)
     assert abs(b.fav_stake.iloc[0]-2*(.7+.05*.7*.3)) < 1e-10
     pd.DataFrame(early+[row(9400,.01,1e8),row(9406,.7,2)]).to_parquet(path)

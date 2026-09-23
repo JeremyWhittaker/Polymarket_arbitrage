@@ -145,7 +145,7 @@ def favorites_ledger(side="favorite"):
     fill_ts = b[f"{prefix}_entry_ts"]
     budget = b[f"{prefix}_stake"]
     valid = budget.gt(0) & price.notna()
-    if not (fill_ts[valid] > (b.decision_ts + b.entry_delay_s)[valid]).all() or not (fill_ts[valid] < b.game_start_ts[valid]).all():
+    if not (fill_ts[valid] > (b.decision_ts + b.entry_delay_s)[valid]).all() or not (fill_ts[valid] < b.entry_expiry_ts[valid]).all():
         raise ValueError("pregame entry is outside its causal execution window")
     if not np.isfinite(b.loc[valid, "fee_rate"]).all() or (b.loc[valid, "fee_rate"] < 0).any():
         raise ValueError("pregame execution fee unknown")
@@ -160,9 +160,10 @@ def favorites_ledger(side="favorite"):
     name = np.where(b.p0 >= .5, b.o1 if dog else b.o0, b.o0 if dog else b.o1)
     t = pd.DataFrame(dict(period=_period(b.decision_ts), sport=b.family, league=b.league, event=b.event_slug,
         market=b.market_slug, side=name, signal_ts=b.decision_ts, receipt_ts=b.decision_ts,
-        eligible_ts=b.decision_ts + b.entry_delay_s, expiry_ts=b.game_start_ts,
+        eligible_ts=b.decision_ts + b.entry_delay_s, expiry_ts=b.entry_expiry_ts,
         entry_ts=fill_ts.where(valid), entry_price=price.where(valid), shares=shares, stake_usd=stake,
-        fee_usd=fees, cost_usd=cost, exit_kind="resolution", exit_ts=b.closed_ts, exit_price=won,
+        fee_usd=fees, cost_usd=cost, exit_kind=np.where(valid,"resolution","unfilled"),
+        exit_ts=b.closed_ts.where(valid), exit_price=won.where(valid),
         payout=shares * won, pnl_usd=shares * won - cost,
         roi=np.where(cost > 0, (shares * won - cost) / cost, np.nan),
         status=np.where(cost <= 0,"unfilled",np.where(cost >= 100-1e-8,"filled","partial")),
@@ -170,7 +171,8 @@ def favorites_ledger(side="favorite"):
     slug = "underdog_all_sports" if dog else "favorites_all_sports"
     return _write(_meta(slug, f"Pregame {side}s across sports", "pmsports/analysis/favorites.py", "reports/FAVORITES.md",
         "Decision10min before scheduled start from prior-hour prices; first actual same-side print strictly after delay;100 inclusive-dollar target capped by print shares",
-        extra=("Strictly prior observed pregame volume floor remains a legacy-coverage sensitivity",)), t)
+        extra=("Strictly prior observed pregame volume floor remains a legacy-coverage sensitivity",
+               "Entry expires at the earlier of scheduled start and Gamma closedTime; closure is a terminal-clock proxy, not measured public resolution receipt")), t)
 
 
 def _mlb_games():

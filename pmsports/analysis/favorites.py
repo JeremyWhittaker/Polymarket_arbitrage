@@ -140,7 +140,15 @@ def favorite_bets(m: pd.DataFrame) -> pd.DataFrame:
     bets = bets[bets.fav_p.between(0.02, 0.99) & bets.fav_won.notna()]
     bets["date"] = pd.to_datetime(bets.game_start_ts, unit="s", utc=True)
     bets["season"] = bets.date.dt.year
+    # Gamma closure is an analytical cutoff, not a measured resolution receipt.
+    # A canceled market can close before its advertised start. Keep its signal
+    # but never allocate a later print or invent a post-entry settlement clock.
+    bets["entry_expiry_ts"] = np.minimum(bets.game_start_ts, bets.closed_ts)
     for side in ("fav", "dog"):
+        unavailable = (bets.entry_expiry_ts.isna()
+                       | bets[f"{side}_entry_ts"].ge(bets.entry_expiry_ts))
+        bets.loc[unavailable, [f"{side}_ask", f"{side}_entry_ts"]] = np.nan
+        bets.loc[unavailable, f"{side}_entry_size"] = 0.
         price = bets[f"{side}_ask"]
         size = bets.get(f"{side}_entry_size", pd.Series(0.0, index=bets.index))
         unit_cost = price + taker_fee(1.0, price, bets.fee_rate.fillna(0))
@@ -247,11 +255,14 @@ def _render(b, t) -> str:
              f"{len(b):,} eligible games within the collected subset. Decision: {DECISION_LEAD}s before "
              f"scheduled start; liquidity >= ${PREGAME_MIN_USD:,} observed strictly before that decision. "
              "Signal is the preceding hour's median normalized price (at least three prints).", "",
-             f"Entry: first same-side print strictly more than {ENTRY_DELAY}s after decision and before start. "
+             f"Entry: first same-side print strictly more than {ENTRY_DELAY}s after decision and before both start and recorded closure. "
              f"Available size caps each ${TARGET_USD:.0f} target, including fees. `fav_partial_proxy_roi` "
              "weights returns by those capped stakes; unfilled signals remain in the counts. Tape prints "
              "do not establish available order-book depth or a fill available to a follower. `ask` is a "
              "legacy column name for this later-print proxy, not a historical quote.", "",
+             "Gamma closedTime is an analytical expiry/terminal-clock proxy, not measured public resolution receipt. "
+             "Missing closure produces no fill. Late blockchain prints may settle earlier orders; they do not "
+             "establish a new entry opportunity after the declared cutoff.", "",
              "The original corpus used an eventual $50k volume floor and bounded tape windows. A causal "
              "$25k decision-time filter does not restore missing markets or history. Results are exploratory; "
              "2026 has already been inspected. Signal-price and fixed-slippage columns are hypothetical "
