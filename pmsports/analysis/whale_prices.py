@@ -43,6 +43,7 @@ def follower_entries(f: pd.DataFrame, signal: np.ndarray, delay: int = 3, horizo
     out["signal_price"] = sig.q.to_numpy()
     out["leader_notional"] = sig.usd.to_numpy()
     out["sport"] = sig.sport.to_numpy()
+    out["closed_ts"] = sig.closed_ts.to_numpy()
     out["period"] = np.where(sig.ts.to_numpy() < SPLIT_TS, "dev", "holdout")
     return out
 
@@ -88,7 +89,10 @@ def run() -> None:
         g = g.copy().sort_values("signal_ts")
         g["id"] = np.arange(1, len(g) + 1)
         g["entry_ts"] = g.fill_ts
-        g["exit_kind"] = "resolution"
+        filled = g.shares.gt(0)
+        g["exit_kind"] = np.where(filled, "resolution", "unfilled")
+        g["exit_ts"] = g.closed_ts.where(filled)
+        g["exit_price"] = g.y.where(filled)
         g["note"] = "Historical later-print proxy; public receipt and depth unknown"
         slug = f"whale_{band}_{policy}_{int(slip * 100)}c"
         doc = dict(slug=slug, title=f"Whale {band} {policy} +{slip:.0%}", group="Whale signals",
@@ -115,7 +119,9 @@ def ev_table(f: pd.DataFrame) -> pd.DataFrame:
     """DESCRIPTIVE settlement calibration at the signal print, not a follower return."""
     q, y, fr, ev, m, ts = (f.q.to_numpy(), f.y.to_numpy(), f.fee_rate.to_numpy(),
                            f.ev.to_numpy(), f.m.to_numpy(), f.ts.to_numpy())
-    pt = np.floor(q * 100).astype(int)
+    edges = (np.arange(50, 101) / 100.).astype(q.dtype)
+    pt = np.searchsorted(edges, q, side="right") + 49
+    pt = np.where((q >= edges[0]) & (q < 1), np.minimum(pt, 99), -1)
     order = np.lexsort((ts, m))
     rows = []
     for c in range(50, 100):

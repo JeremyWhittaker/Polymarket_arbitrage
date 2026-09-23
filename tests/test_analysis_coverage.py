@@ -119,3 +119,15 @@ def test_bounded_volume_matches_full_history_with_ties_and_unsorted_rows():
         for limit in (1,31,50,1000):
             np.testing.assert_allclose(bounded_prior_notional(frame,limit),prior_notional(frame),rtol=1e-12,atol=1e-10)
     assert bounded_prior_notional(tape.iloc[:0]).size==0
+
+
+def test_whale_descriptive_cent_bins_preserve_float32_boundaries():
+    from pmsports.analysis.whale_prices import ev_table
+    prices=np.arange(50,100,dtype=float)/100
+    q=np.repeat(prices.astype(np.float32),200)
+    f=pd.DataFrame({'q':q,'y':1.,'fee_rate':0.,'ev':np.arange(len(q)),
+                    'm':np.arange(len(q)),'ts':np.arange(len(q))})
+    result=ev_table(f)
+    assert result.price_c.tolist()==list(range(50,100))
+    assert result.bets.eq(200).all()
+    np.testing.assert_allclose(result.cost_per_share,prices,rtol=1e-6)
