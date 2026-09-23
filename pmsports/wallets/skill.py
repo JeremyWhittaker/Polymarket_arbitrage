@@ -38,13 +38,80 @@ def valid_trades(t: pd.DataFrame) -> pd.DataFrame:
     return t if valid.all() else t.loc[valid]
 
 
-def positions(t: pd.DataFrame) -> pd.DataFrame:
-    """Per (wallet, market) exposure, P&L and luck variance.
+POSITION_BATCH_ROWS = 250_000
 
-    numpy sort + reduceat on a combined integer key: memory stays ~a few arrays of len(t)
-    (a pandas groupby over a wide temp frame OOMs at ~50M fills).
+
+def _market_batches(t: pd.DataFrame, batch_rows: int):
+    """Complete markets, stable within each market; never split a wallet-market group.
+
+    The loader and its time-filtered subsets are already market ordered. Unsorted
+    callers need one stable row index, not copies of every economic column. A
+    single market larger than the target is processed intact.
     """
+    codes = t.condition_id.cat.codes.to_numpy()
+    ordered = all(np.all(codes[max(0, a-1):b-1] <= codes[max(0, a-1)+1:b])
+                  for a in range(0, len(codes), batch_rows)
+                  for b in [min(a + batch_rows, len(codes))])
+    order = None if ordered else np.argsort(codes, kind="stable")
+    sorted_codes = codes if order is None else codes[order]
+    boundaries = []
+    for a in range(0, len(codes), batch_rows):
+        start = max(1, a)
+        stop = min(a + batch_rows, len(codes))
+        changes = np.flatnonzero(sorted_codes[start:stop] != sorted_codes[start-1:stop-1]) + start
+        boundaries.extend(changes.tolist())
+    boundaries.append(len(codes))
+    del sorted_codes
+    begin = previous = 0
+    for end in boundaries:
+        if end - begin > batch_rows and previous > begin:
+            yield t.iloc[begin:previous] if order is None else t.iloc[order[begin:previous]]
+            begin = previous
+        previous = end
+    if previous > begin:
+        yield t.iloc[begin:previous] if order is None else t.iloc[order[begin:previous]]
+
+
+def positions(t: pd.DataFrame, batch_rows: int = POSITION_BATCH_ROWS) -> pd.DataFrame:
+    """Exact full-data wallet-market aggregation with bounded reduction temporaries.
+
+    Each market occurs in one batch, so the original stable within-group floating
+    accumulation is unchanged. Only reduced positions are concatenated and sorted
+    into the original wallet/market categorical order. No rows are sampled.
+    """
+    if not isinstance(batch_rows, (int, np.integer)) or batch_rows < 1:
+        raise ValueError("batch_rows must be a positive integer")
     t = valid_trades(t)
+    if t.empty:
+        return _positions_batch(t)
+    parts = [_positions_batch(batch) for batch in _market_batches(t, batch_rows)]
+    if len(parts) == 1:
+        return parts[0]
+    # Sort only reduced categorical codes, then assemble one column at a time.
+    # A DataFrame concat/sort/reset would retain several full position-table
+    # copies. Pop each independent batch column as it is consumed instead.
+    wallet_codes = np.concatenate([p.proxyWallet.cat.codes for p in parts])
+    market_codes = np.concatenate([p.condition_id.cat.codes for p in parts])
+    order = np.lexsort((market_codes, wallet_codes))
+    del wallet_codes, market_codes
+    columns = {}
+    for name in list(parts[0].columns):
+        chunks = [p.pop(name) for p in parts]
+        dtype = chunks[0].dtype
+        if isinstance(dtype, pd.CategoricalDtype):
+            values = np.concatenate([c.cat.codes.to_numpy() for c in chunks])
+            del chunks
+            columns[name] = pd.Categorical.from_codes(values[order], dtype=dtype)
+        else:
+            values = np.concatenate([c.to_numpy() for c in chunks])
+            del chunks
+            columns[name] = values[order]
+        del values
+    return pd.DataFrame(columns, copy=False)
+
+
+def _positions_batch(t: pd.DataFrame) -> pd.DataFrame:
+    """Original stable sort/reduceat computation, applied to complete markets."""
     if t.empty:
         out = pd.DataFrame({c: pd.Series(dtype=float) for c in ("cost", "pnl", "fee", "a", "b", "shares", "in_play", "n", "ts", "var", "pnl_net")})
         for target, source in (("proxyWallet", "proxyWallet"), ("condition_id", "condition_id"), ("family", "family"), ("event", "event_slug")):
@@ -75,7 +142,8 @@ def positions(t: pd.DataFrame) -> pd.DataFrame:
     out["n"] = n
     out["ts"] = np.minimum.reduceat(t.timestamp.to_numpy()[order], starts) if len(starts) else np.array([])
     del size, q, side0, order
-    pos = pd.DataFrame(out)
+    # Keep columns independent so the combiner can release each consumed array.
+    pos = pd.DataFrame(out, copy=False)
     k0 = key[starts]
     wcode, mcode = (k0 // nm).astype(np.int32), (k0 % nm).astype(np.int32)
     p0 = (pos.p0w / pos.shares).clip(0.001, 0.999)
@@ -90,7 +158,8 @@ def positions(t: pd.DataFrame) -> pd.DataFrame:
     for c, src in (("family", "family"), ("event", "event_slug")):
         codes = t[src].cat.codes.to_numpy()[first[mcode]]
         pos[c] = pd.Categorical.from_codes(codes, categories=t[src].cat.categories)
-    return pos.drop(columns=["p0w"])
+    del pos["p0w"]
+    return pos
 
 
 def wallet_stats(pos: pd.DataFrame) -> pd.DataFrame:

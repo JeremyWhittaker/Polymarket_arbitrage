@@ -118,9 +118,13 @@ def run(t: pd.DataFrame, split: str, lb: pd.DataFrame | None = None, label: str 
     ts = pd.Timestamp(split, tz="UTC").timestamp()
     t1 = t[_causal_cutoff(t, ts, meta)]
     t2 = t[t.timestamp >= ts]
-    pos1, pos2 = skill.positions(t1), skill.positions(t2)
-    s1, s2 = skill.wallet_stats(pos1), skill.wallet_stats(pos2)
-    log.info("[%s] P1 %d wallets / %d fills, P2 %d wallets / %d fills", label, len(s1), len(t1), len(s2), len(t2))
+    n1 = len(t1)
+    s1 = skill.wallet_stats(skill.positions(t1))
+    del t1
+    # Reduce each period before materializing the other's positions. Copy replay
+    # needs only the evaluation tape and these much smaller wallet summaries.
+    s2 = skill.wallet_stats(skill.positions(t2))
+    log.info("[%s] P1 %d wallets / %d fills, P2 %d wallets / %d fills", label, len(s1), n1, len(s2), len(t2))
 
     # does skill persist at all? rank correlation of P1 vs P2 z across wallets active in both
     both = s1[s1.markets >= MIN_MKTS].join(s2[s2.markets >= MIN_MKTS], lsuffix="_1", rsuffix="_2", how="inner")
@@ -213,6 +217,7 @@ def walk_forward(t: pd.DataFrame, start: str, end: str, lookback_days: int = 180
         s = pos.groupby("proxyWallet", observed=True).agg(markets=("cost", "size"), staked=("cost", "sum"),
                                                            pnl=("pnl", "sum"), var=("var", "sum"))
         s["z"] = s.pnl / np.sqrt(s["var"].clip(lower=1e-9))
+        del hist_t, pos
         act = s[s.markets >= MIN_MKTS]
         picks = {"z": act.nlargest(TOP_K, "z").index, "whales": s.nlargest(TOP_K, "staked").index,
                  "random": act.index[rng.choice(len(act), size=min(TOP_K, len(act)), replace=False)]
@@ -242,6 +247,7 @@ def decompose_skilled(t: pd.DataFrame, split: str, delays=(0, 1, 2, 5, 30), meta
     ts = pd.Timestamp(split, tz="UTC").timestamp()
     t1 = t[_causal_cutoff(t, ts, meta)]
     s1 = skill.wallet_stats(skill.positions(t1))
+    del t1
     fdr = skill.fdr_survivors(s1[s1.markets >= MIN_MKTS].z).tolist()
     t2 = t[t.timestamp >= ts]
     rows = t2[t2.proxyWallet.isin(fdr)]

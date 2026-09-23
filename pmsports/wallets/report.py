@@ -189,8 +189,10 @@ def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None, run_id="") -
          "other-wallet print, not retroactive purchase at the signal. Previously explored2026 windows are not fresh confirmation.", ""]
     L += ["## 1. Does skill persist from 2025 to 2026?", "",
           "`rho` = rank correlation of a wallet's 2025 and 2026 z/ROI (wallets with >= 30 markets in both). "
-          "`fdr_survivors` = 2025 wallets whose z is significant after correcting for testing thousands "
-          "of wallets; `expected_z>3_by_luck` is how many would clear z > 3 with zero skill.", "",
+          "`fdr_survivors` = wallets passing a normal-tail, fair-price-model screen with Benjamini–Hochberg "
+          "at nominal 5%. This model-based screen does not prove skill or guarantee realized FDR with "
+          "dependent markets and imperfectly calibrated tails. `expected_z>3_by_luck` is the model's "
+          "expected count under its assumptions, not an empirical count of lucky wallets.", "",
           _md(fams), ""]
     if len(decs):
         L += ["2025 z-decile -> 2026 ROI (all sports):", "", _md(decs[decs.family == "ALL"].drop(columns="family")), ""]
@@ -231,7 +233,7 @@ def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None, run_id="") -
     if dec_sk is not None and len(dec_sk):
         a = dec_sk.attrs
         L += ["## 6. Historically selected wallets: timing and allocation sensitivity", "",
-              f"The {a.get('wallets', '?')} wallets whose 2025 z survives the FDR correction, copied on their "
+              f"The {a.get('wallets', '?')} wallets whose 2025 z passes the model-based FDR screen, copied on their "
               f"{a.get('fills', 0):,} fills in 2026 ({a.get('in_play_share', 0):.0%} in-play, median fill "
               f"${a.get('median_trade_usd', 0):.0f}). `proportional` uses1% of the observed leader ticket capped$100 "
               "and subject to the same event/print constraints. Delay starts from the historical transaction timestamp; "

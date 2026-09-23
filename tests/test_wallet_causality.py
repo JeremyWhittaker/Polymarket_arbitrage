@@ -236,3 +236,131 @@ def test_funded_move_is_strictly_between_five_and_ten_minutes(monkeypatch,tmp_pa
     assert 'strictly after signal+300 seconds and before signal+600 seconds' in text
     assert 'only for actually funded equal-target orders' in text
     assert 'move_funded_signals' in text and '~0 means no information' not in text
+
+
+# Frozen pre-batching oracle: retain the original stable accumulation exactly.
+def _legacy_positions_reference(t: pd.DataFrame) -> pd.DataFrame:
+    """Per (wallet, market) exposure, P&L and luck variance.
+
+    numpy sort + reduceat on a combined integer key: memory stays ~a few arrays of len(t)
+    (a pandas groupby over a wide temp frame OOMs at ~50M fills).
+    """
+    from pmsports.wallets import skill
+    t = skill.valid_trades(t)
+    if t.empty:
+        out = pd.DataFrame({c: pd.Series(dtype=float) for c in ("cost", "pnl", "fee", "a", "b", "shares", "in_play", "n", "ts", "var", "pnl_net")})
+        for target, source in (("proxyWallet", "proxyWallet"), ("condition_id", "condition_id"), ("family", "family"), ("event", "event_slug")):
+            out[target] = t[source].iloc[:0].reset_index(drop=True)
+        return out
+
+    w = t.proxyWallet.cat.codes.to_numpy().astype(np.int64)
+    m = t.condition_id.cat.codes.to_numpy().astype(np.int64)
+    nm = int(m.max()) + 1 if len(m) else 1
+    order = np.argsort(w * nm + m, kind="stable")
+    key = (w * nm + m)[order]
+    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
+    del w, m
+
+    def red(x):
+        return np.add.reduceat(np.asarray(x)[order], starts) if len(starts) else np.array([])
+
+    size = t["size"].to_numpy(np.float64)
+    q = t.q.to_numpy(np.float64)
+    side0 = t.side_idx.to_numpy() == 0
+    out = {"cost": red(size * q), "pnl": red(size * (t.y.to_numpy(np.float64) - q)),
+           "fee": red(skill.taker_fee(size, q, t.fee_rate.to_numpy(np.float64))),
+           "a": red(np.where(side0, size, 0.0)), "b": red(np.where(side0, 0.0, size)),
+           "p0w": red(size * np.where(side0, q, 1 - q)), "shares": red(size),
+           "in_play": red(t.in_play.to_numpy(np.float64))}
+    n = np.diff(np.r_[starts, len(key)])
+    out["in_play"] = out["in_play"] / n
+    out["n"] = n
+    out["ts"] = np.minimum.reduceat(t.timestamp.to_numpy()[order], starts) if len(starts) else np.array([])
+    del size, q, side0, order
+    pos = pd.DataFrame(out)
+    k0 = key[starts]
+    wcode, mcode = (k0 // nm).astype(np.int32), (k0 % nm).astype(np.int32)
+    p0 = (pos.p0w / pos.shares).clip(0.001, 0.999)
+    pos["var"] = (pos.a - pos.b) ** 2 * p0 * (1 - p0)
+    pos["pnl_net"] = pos.pnl - pos.fee
+    pos["proxyWallet"] = pd.Categorical.from_codes(wcode, categories=t.proxyWallet.cat.categories)
+    pos["condition_id"] = pd.Categorical.from_codes(mcode, categories=t.condition_id.cat.categories)
+    # per-market attributes via first row of each market code
+    mc = t.condition_id.cat.codes.to_numpy()
+    first = np.full(len(t.condition_id.cat.categories), -1, dtype=np.int64)
+    first[mc[::-1]] = np.arange(len(mc))[::-1]
+    for c, src in (("family", "family"), ("event", "event_slug")):
+        codes = t[src].cat.codes.to_numpy()[first[mcode]]
+        pos[c] = pd.Categorical.from_codes(codes, categories=t[src].cat.categories)
+    return pos.drop(columns=["p0w"])
+
+
+def _position_fixture():
+    rng=np.random.default_rng(917)
+    rows=[]
+    for market, count, payout in [('c3',17,1.),('c1',5,.5),('c2',23,0.),('c0',9,1.)]:
+        for i in range(count):
+            side=i%2
+            rows.append(dict(condition_id=market,proxyWallet=['w3','w0','w2'][i%3],
+                timestamp=1000+i,side_idx=side,q=float(rng.uniform(.01,.99)),
+                size=float(rng.choice([1e-5,1.,1234.567,1e6])),y=payout if side==0 else 1-payout,
+                fee_rate=float(rng.choice([0.,.03,.05])),in_play=bool(i%3),
+                family='soccer' if i==0 else 'tennis',event_slug='event-'+market))
+    t=pd.DataFrame(rows)
+    for col,categories in [('condition_id',['c2','c0','c3','c1','unused-market']),
+        ('proxyWallet',['w2','w3','w0','unused-wallet']),('family',['tennis','soccer','unused-sport']),
+        ('event_slug',['event-c0','event-c3','event-c2','event-c1','unused-event'])]:
+        t[col]=pd.Categorical(t[col],categories=categories,ordered=True)
+    return t
+
+
+@pytest.mark.parametrize('unsorted',[False,True])
+def test_market_batches_preserve_exact_positions_stats_and_fdr(unsorted,monkeypatch):
+    from pmsports.wallets import skill
+    t=_position_fixture()
+    t=t.sample(frac=1,random_state=71) if unsorted else t.sort_values('condition_id',kind='stable')
+    # Deliberately retain duplicate/nonmonotone DataFrame indices.
+    t.index=np.arange(len(t))%4
+    expected=_legacy_positions_reference(t)
+    seen=[];original=skill._positions_batch
+    def record(batch):
+        markets=set(batch.condition_id.astype(str))
+        assert len(batch)<=20 or len(markets)==1
+        assert not any(markets&previous for previous in seen)
+        seen.append(markets)
+        return original(batch)
+    monkeypatch.setattr(skill,'_positions_batch',record)
+    got=skill.positions(t,batch_rows=20)
+    pd.testing.assert_frame_equal(got,expected,check_exact=True)
+    assert len(seen)>=3 and got.n.sum()==len(t)
+    old_stats=skill.wallet_stats(expected);new_stats=skill.wallet_stats(got)
+    pd.testing.assert_frame_equal(new_stats,old_stats,check_exact=True)
+    pd.testing.assert_series_equal(skill.fdr_survivors(new_stats.z),skill.fdr_survivors(old_stats.z))
+    assert got.condition_id.cat.categories.tolist()==t.condition_id.cat.categories.tolist()
+    assert got.proxyWallet.cat.categories.tolist()==t.proxyWallet.cat.categories.tolist()
+
+
+def test_market_ordered_input_never_sorts_full_trade_count(monkeypatch):
+    from pmsports.wallets import skill
+    t=_position_fixture().sort_values('condition_id',kind='stable')
+    expected=_legacy_positions_reference(t)
+    sizes=[];original=skill.np.argsort
+    def bounded(values,*args,**kwargs):
+        sizes.append(len(values))
+        assert len(values)<=23 # largest complete market; never all54 rows
+        return original(values,*args,**kwargs)
+    monkeypatch.setattr(skill.np,'argsort',bounded)
+    pd.testing.assert_frame_equal(skill.positions(t,batch_rows=20),expected,check_exact=True)
+    assert max(sizes)==23 and len(sizes)>=3
+
+
+def test_batched_positions_preserve_empty_and_invalid_schema():
+    from pmsports.wallets import skill
+    t=_position_fixture()
+    for rows in (t.iloc[:0],t.assign(q=-1)):
+        got=skill.positions(rows,batch_rows=1)
+        expected=_legacy_positions_reference(rows)
+        pd.testing.assert_frame_equal(got,expected,check_exact=True)
+        pd.testing.assert_frame_equal(skill.wallet_stats(got),skill.wallet_stats(expected),check_exact=True)
+    with pytest.raises(ValueError,match='positive integer'):
+        skill.positions(t,batch_rows=0)
