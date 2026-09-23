@@ -1,11 +1,12 @@
 from types import SimpleNamespace
+import json
 import numpy as np
 import pandas as pd
 from pmsports.execution import TapeReplay
 from pmsports.research.h_baseball_continuation import (
     normalize,yrfi_side,attach_states,pair_payoff,pair_implied,prior_games,
     prior_reference,replay_pairs,nrfi_orders,totals_orders,state_features,prior_facts,
-    canonical_orientation,economic_exit)
+    canonical_orientation,economic_exit,summarize,clean)
 
 
 def test_asset_orientation_and_sell_complement():
@@ -149,3 +150,52 @@ def test_economic_exit_distinguishes_full_partial_unwind_and_no_entry():
     assert kind=='mixed' and ts==500. and np.isclose(px,.21)
     r.shares=0.
     assert economic_exit(r)==('unfilled',None,None)
+
+
+def test_equal_game_bootstrap_aggregates_legs_before_equal_weighting():
+    # Game 1 has two offsetting legs; game 2 deploys much more capital.
+    b=pd.DataFrame({'game_pk':[1,1,2,3,4,5,6],
+        'cost_usd':[9.,1.,100.,1.,1.,1.,0.],
+        'pnl_usd':[-9.,9.,100.,-1.,-1.,-1.,0.],
+        'shares':[9.,1.,100.,1.,1.,1.,0.],
+        'status':['filled']*6+['unfilled']})
+    s=summarize(b)
+    # Independent bootstrap of one aggregate observation per game, sorted by ID.
+    game_roi=np.array([0.,1.,-1.,-1.,-1.])
+    game_pnl=np.array([0.,100.,-1.,-1.,-1.])
+    game_cost=np.array([10.,100.,1.,1.,1.])
+    idx=np.random.default_rng(0).integers(0,5,(2000,5))
+    equal_ci=np.percentile(game_roi[idx].mean(axis=1),[2.5,97.5])
+    cash_ci=np.percentile(game_pnl[idx].sum(axis=1)/game_cost[idx].sum(axis=1),[2.5,97.5])
+    assert np.isclose(s['equal_game_roi'],-.4)
+    np.testing.assert_allclose(s['equal_game_ci'],equal_ci)
+    assert np.isclose(s['roi'],97/113)
+    np.testing.assert_allclose(s['ci'],cash_ci)
+    assert s['games']==5 and s['signals']==7 and s['unfilled']==1
+    assert s['equal_game_roi']<0<s['roi']
+    assert not np.isclose(s['equal_game_roi'],(b.loc[b.cost_usd.gt(0),'pnl_usd']/b.loc[b.cost_usd.gt(0),'cost_usd']).mean())
+
+    # Splitting a fill into two rows must not change either economic estimand.
+    split=b.iloc[[2,2]].copy()
+    split[['cost_usd','pnl_usd','shares']]/=2
+    split=pd.concat([b.drop(index=2),split],ignore_index=True)
+    split_summary=summarize(split)
+    for k in ('equal_game_roi','equal_game_ci','roi','ci','cost','pnl','games'):
+        np.testing.assert_allclose(split_summary[k],s[k])
+
+
+def test_equal_game_bootstrap_empty_and_small_sample_null_semantics():
+    columns=['game_pk','cost_usd','pnl_usd','shares','status']
+    no_fill=pd.DataFrame([[1,0.,0.,0.,'unfilled']],columns=columns)
+    for b in (no_fill.iloc[:0],no_fill):
+        s=summarize(b)
+        assert s['equal_game_roi'] is None
+        assert s['equal_game_ci']==[None,None]
+        assert s['roi'] is None and s['ci']==[None,None]
+        json.dumps(s,allow_nan=False)
+    one_game=pd.DataFrame([[1,5.,2.,10.,'filled']],columns=columns)
+    s=summarize(one_game)
+    assert s['equal_game_roi']==.4
+    assert s['equal_game_ci']==[None,None]
+    assert clean(s)['ci']==[None,None]
+    json.dumps(clean(s),allow_nan=False)

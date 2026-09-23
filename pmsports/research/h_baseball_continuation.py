@@ -318,16 +318,21 @@ def replay_pairs(engine,orders,slip=0):
 
 def summarize(b):
     filled=b[b.cost_usd>0]
-    if filled.empty: return {'signals':len(b),'filled_legs':0,'games':0,'cost':0.,'pnl':0.,'roi':None,'ci':[None,None],'unfilled':len(b)}
+    if filled.empty: return {'signals':len(b),'filled_legs':0,'games':0,'cost':0.,'pnl':0.,'roi':None,'ci':[None,None],
+                            'unfilled':len(b),'equal_game_roi':None,'equal_game_ci':[None,None]}
     roi,lo,hi=C.cluster_ci(filled.pnl_usd/filled.cost_usd,filled.game_pk,weights=filled.cost_usd)
     g=filled.groupby('game_pk').agg(pnl=('pnl_usd','sum'),cost=('cost_usd','sum')).sort_values('pnl',ascending=False)
+    # Aggregate all legs first: one ROI and one bootstrap vote per funded game.
+    # Unweighted legs would overweight games with more orders/partial fills.
+    _,game_lo,game_hi=C.cluster_ci(g.pnl/g.cost,g.index)
     trimmed=g.iloc[3:]
     return {'signals':len(b),'filled_legs':len(filled),'games':len(g),'cost':float(filled.cost_usd.sum()),
         'pnl':float(filled.pnl_usd.sum()),'roi':roi,'ci':[lo,hi],'unfilled':int(b.shares.eq(0).sum()),
         'partial_legs':int(b.status.eq('partial').sum()),'median_fill_cost':float(filled.cost_usd.median()),
         'maximum_game_cost':float(g.cost.max()),'top3_pnl':float(g.head(3).pnl.sum()),
         'without_top3_roi':float(trimmed.pnl.sum()/trimmed.cost.sum()) if trimmed.cost.sum() else None,
-        'equal_game_roi':float((g.pnl/g.cost).mean())}
+        'equal_game_roi':float((g.pnl/g.cost).mean()),
+        'equal_game_ci':[float(v) if np.isfinite(v) else None for v in (game_lo,game_hi)]}
 
 
 def clean(obj):
@@ -421,14 +426,25 @@ def run():
 def write_report(a):
     lines=['# Recovered MLB hypotheses: corrected historical tests','',
         'These four tests use actual later transactions with finite printed size, historical fees and $100/game targets. They do **not** establish executable depth, timely feed receipt or a fresh holdout. All historical periods had already been inspected.','',
-        '| Rule | Period | Signals/legs | Filled games | Capital incl. fees | Net P&L | Net ROI | Game-cluster 95% CI | +1c ROI |',
+        '| Rule | Period | Signals/legs | Filled games | Capital incl. fees | Net P&L | Cash-weighted ROI | Cash ROI game-cluster 95% CI | +1c cash ROI |',
         '|---|---|---:|---:|---:|---:|---:|---|---:|']
     def pct(x): return 'n/a' if x is None or not np.isfinite(x) else f'{100*x:.2f}%'
     for slug,r in a['results'].items():
         for period in ('all','dev','holdout'):
             v=r['primary'][period]; stress=r['plus_1c'][period]
             lines.append(f'| {slug} | {period} | {v["signals"]} | {v["games"]} | ${v["cost"]:,.2f} | ${v["pnl"]:,.2f} | {pct(v["roi"])} | {pct(v["ci"][0])} to {pct(v["ci"][1])} | {pct(stress["roi"])} |')
-    lines+=['','No deployable edge is established by these tests. Read positive totals/NRFI point estimates with the interval, tiny first-print capacity, opposite-period results and concentration below. The pair diagnostic tests whether the pricing claim exists before any hypothetical atomic-fill profit.','',
+    lines+=['','No deployable edge is established by these tests. Read positive totals/NRFI cash point estimates with the interval, tiny first-print capacity, opposite-period results and concentration below. The pair diagnostic tests whether the pricing claim exists before any hypothetical atomic-fill profit.','',
+        '## Original NRFI equal-game inference','',
+        'The original NRFI requirement is equal weighting by game with `C.cluster_ci`. For each funded game, sum every leg’s net P&L and fees-inclusive capital, divide those sums, then average the resulting game ROIs. Each game gets one bootstrap vote, regardless of its capital or number of legs. This differs from the cash-weighted ROI above. No-fill games have no defined ROI and do not enter either ROI interval; their signals remain in the audit.','',
+        '| Period | Replay | Funded games | Equal-game ROI | Equal-game 95% CI | Cash-weighted ROI |',
+        '|---|---|---:|---:|---|---:|']
+    nrfi=a['results'][SLUGS[1]]
+    for period in ('all','dev','holdout'):
+        for policy,label in (('primary','Primary'),('plus_1c','+1c')):
+            v=nrfi[policy][period]
+            lines.append(f'| {period} | {label} | {v["games"]} | {pct(v["equal_game_roi"])} | {pct(v["equal_game_ci"][0])} to {pct(v["equal_game_ci"][1])} | {pct(v["roi"])} |')
+    v=nrfi['primary']['all']
+    lines += ['',f'The original pooled NRFI equal-game estimate is **{pct(v["equal_game_roi"])}** (95% CI {pct(v["equal_game_ci"][0])} to {pct(v["equal_game_ci"][1])}); the cash-weighted estimate is {pct(v["roi"])}. The cash result cannot replace the original equal-game test. These already-explored periods do not establish a repeatable edge.','',
         '## Rules and repairs','',
         '- **Totals pace:** half innings completed = 2×(inning−1)+bottom; pace = runs−line×hic/18. A game-weighted linear regression of Over outcome minus its observed acquisition price on pace uses strictly prior seasons and hic≥4. First matching acquired-side signal/game requires ≥6c signed fitted residual; Over behind pace and Under ahead. At least five pregame prints; later entry before the next state. A season without 20 prior sampled games is unavailable, not a zero-return test. This is stricter than the recovered same-season DEV fit and prevents future-season training leakage.',
         '- **NRFI:** buy only canonical YRFI, using Gamma question/description plus actual Yes/No labels. Prior-season rate counts r1≥1, never raw run-count means. First-inning totals come from the corrected inning-2 top checkpoint, including runs on the final out; actual schedule dates restrict training to earlier seasons. At least 100 prior games are required. This avoids the old derivative-only history, which had just one pre-2025 game and could invent a 100% prior. Begin looking T−20min; five strictly earlier prints must already exist. Signal is first observed YRFI acquisition ≤ prior rate; entry is a different later acquisition still ≤ that limit, before scheduled start. No completed-pregame liquidity is used at an earlier decision.',
@@ -436,11 +452,11 @@ def write_report(a):
         '- **Margin transition:** a fixed logistic model uses inning, half, outs, occupied bases, margin, margin×inning and signed squared margin. Fit on corrected baseline states from strictly earlier seasons, with each game equal total training weight. First observed cheap-side acquisition with |model−canonical home-cover price|≥8c signals; later entry before the next state. No moneyline haircut or outcome-dependent state reconstruction.','',
         '**Recovered algebra error:** the No/No pair pays 1+1{|margin|≤1}; for completed nontied games its fair value is 1+s₁. The price-implied one-run probability is therefore **pair price−1**, not `2−pair price` from the original prompt. A price below 1.15 is a directional one-run bet, not guaranteed profit. Settlement uses each actual contract payout, including voids.','',
         '## Capacity and concentration','',
-        '| Rule | No fills | Partial legs | Median filled capital | Top-three-game P&L | ROI excluding top three | Equal-game ROI |',
-        '|---|---:|---:|---:|---:|---:|---:|']
+        '| Rule | No fills | Partial legs | Median filled capital | Top-three-game P&L | Cash ROI excluding top three | Equal-game ROI | Equal-game 95% CI |',
+        '|---|---:|---:|---:|---:|---:|---:|---|']
     for slug,r in a['results'].items():
         v=r['primary']['all']
-        lines.append(f'| {slug} | {v["unfilled"]} | {v.get("partial_legs",0)} | ${v.get("median_fill_cost",0):.2f} | ${v.get("top3_pnl",0):.2f} | {pct(v.get("without_top3_roi"))} | {pct(v.get("equal_game_roi"))} |')
+        lines.append(f'| {slug} | {v["unfilled"]} | {v.get("partial_legs",0)} | ${v.get("median_fill_cost",0):.2f} | ${v.get("top3_pnl",0):.2f} | {pct(v.get("without_top3_roi"))} | {pct(v["equal_game_roi"])} | {pct(v["equal_game_ci"][0])} to {pct(v["equal_game_ci"][1])} |')
     lines+=['','## Coverage and inference','',
         f'Coverage: {a["coverage"]["markets"]} selected markets, {a["coverage"]["tapes"]} local tapes, {a["coverage"]["state_joined_prints"]:,} prints joined to corrected states. Ambiguous game aliases excluded: {a["coverage"]["ambiguous_games_excluded"]}. Missing tapes: {len(a["coverage"]["missing_tapes"])}. Newly fetched away-runline targets: 251; all requested creation-to-close, 25,076 returned prints, two empty tapes. Existing derivative/away caches retain their earlier sampling and bounded windows; the sample is not a complete unbiased MLB universe.',
         f'Canonical outcome 0 is verified from actual Over/Under labels or home/away team labels; legacy Yes/No runlines additionally require matching Gamma question and resolution text. Unknown orientation markets excluded: {a["coverage"]["unknown_canonical_orientation_excluded"]}. Missing first-inning totals or final margins are excluded from priors, never counted as false outcomes. Ledger no-fills retain signal time with null entry time; full and partial unwinds carry their actual economic exit clocks/prices.',
@@ -448,7 +464,7 @@ def write_report(a):
         'Frozen NRFI rates: '+json.dumps(clean(a['results'][SLUGS[1]]['model']['prior_rates']))+'.',
         'Totals models: '+json.dumps(clean(a['results'][SLUGS[0]]['model']))+'. The fitted zero-crossing is reported rather than forced to zero; a nonzero crossing weakens the original mechanism.',
         'The corrected MLB panel replaces old phantom/duplicate states. Raw transaction timestamps are used without subtracting estimated chain lag. Historical state timestamps stand in for public knowledge; free MLB feed delay measured elsewhere is much longer than the 3s replay assumption. Next-state expiry is analytical censoring, not proof of canceling a pending sports order. Totals can close on crossing the line: results condition on observed state and surviving prints, and do not estimate unconditional late-game pricing error.',
-        'Only the four recovered primary rules and the declared +1c stress were executed. No parameter scan or post-result winning variant is hidden. Models, source file identities, every signal/fill/no-fill, pair references and all four uncapped desk ledgers are saved. Bootstrap intervals resample whole games; fees-inclusive cash weights determine headline ROI. Equal-game ROI and concentration are also reported. A positive point estimate is exploratory until independently collected receipt/depth data validate entry, capacity and a frozen rule.','',
+        'Only the four recovered primary rules and the declared +1c stress were executed. No parameter scan or post-result winning variant is hidden. Models, source file identities, every signal/fill/no-fill, pair references and all four uncapped desk ledgers are saved. Both 95% bootstrap intervals use C.cluster_ci with 2,000 whole-game resamples and seed 0: cash intervals divide resampled total net P&L by resampled total fees-inclusive capital; equal-game intervals average the resampled per-game aggregate ROIs. Empty samples have null point estimates and bounds; fewer than five funded games have no interval. Neither interval corrects historical selection or multiple testing. A positive point estimate is exploratory until independently collected receipt/depth data validate entry, capacity and a frozen rule.','',
         'The +1c replay retains the original limit: for NRFI it can skip an originally affordable print and take another later print, so its filled sample can change and aggregate ROI need not decrease. This is an executable-limit sensitivity within the transaction proxy, not a same-filled-sample causal cost estimate. Primary and stress Parquets retain every such change.','',
         '## Reproduction','',
         '```bash','OPENBLAS_NUM_THREADS=1 .venv/bin/python -m pmsports.research.h_baseball_continuation',

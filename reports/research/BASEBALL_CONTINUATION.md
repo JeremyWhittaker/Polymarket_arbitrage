@@ -2,7 +2,7 @@
 
 These four tests use actual later transactions with finite printed size, historical fees and $100/game targets. They do **not** establish executable depth, timely feed receipt or a fresh holdout. All historical periods had already been inspected.
 
-| Rule | Period | Signals/legs | Filled games | Capital incl. fees | Net P&L | Net ROI | Game-cluster 95% CI | +1c ROI |
+| Rule | Period | Signals/legs | Filled games | Capital incl. fees | Net P&L | Cash-weighted ROI | Cash ROI game-cluster 95% CI | +1c cash ROI |
 |---|---|---:|---:|---:|---:|---:|---|---:|
 | totals-pace-antiextrapolation | all | 53 | 19 | $246.76 | $120.14 | 48.69% | -66.58% to 216.87% | 42.00% |
 | totals-pace-antiextrapolation | dev | 43 | 17 | $220.28 | $66.61 | 30.24% | -86.62% to 214.92% | 24.14% |
@@ -17,7 +17,22 @@ These four tests use actual later transactions with finite printed size, histori
 | runline-margin-transition | dev | 174 | 69 | $1,006.91 | $-319.04 | -31.69% | -71.00% to 13.43% | -33.19% |
 | runline-margin-transition | holdout | 149 | 62 | $1,229.93 | $-8.50 | -0.69% | -39.01% to 37.27% | -3.06% |
 
-No deployable edge is established by these tests. Read positive totals/NRFI point estimates with the interval, tiny first-print capacity, opposite-period results and concentration below. The pair diagnostic tests whether the pricing claim exists before any hypothetical atomic-fill profit.
+No deployable edge is established by these tests. Read positive totals/NRFI cash point estimates with the interval, tiny first-print capacity, opposite-period results and concentration below. The pair diagnostic tests whether the pricing claim exists before any hypothetical atomic-fill profit.
+
+## Original NRFI equal-game inference
+
+The original NRFI requirement is equal weighting by game with `C.cluster_ci`. For each funded game, sum every leg’s net P&L and fees-inclusive capital, divide those sums, then average the resulting game ROIs. Each game gets one bootstrap vote, regardless of its capital or number of legs. This differs from the cash-weighted ROI above. No-fill games have no defined ROI and do not enter either ROI interval; their signals remain in the audit.
+
+| Period | Replay | Funded games | Equal-game ROI | Equal-game 95% CI | Cash-weighted ROI |
+|---|---|---:|---:|---|---:|
+| all | Primary | 84 | -11.45% | -33.40% to 10.99% | 5.08% |
+| all | +1c | 72 | -15.07% | -38.40% to 8.38% | 9.33% |
+| dev | Primary | 48 | -41.37% | -68.41% to -13.75% | -62.36% |
+| dev | +1c | 42 | -34.42% | -64.04% to -4.59% | -50.60% |
+| holdout | Primary | 36 | 28.43% | -5.94% to 60.84% | 56.41% |
+| holdout | +1c | 30 | 12.03% | -24.29% to 48.65% | 48.42% |
+
+The original pooled NRFI equal-game estimate is **-11.45%** (95% CI -33.40% to 10.99%); the cash-weighted estimate is 5.08%. The cash result cannot replace the original equal-game test. These already-explored periods do not establish a repeatable edge.
 
 ## Rules and repairs
 
@@ -30,12 +45,12 @@ No deployable edge is established by these tests. Read positive totals/NRFI poin
 
 ## Capacity and concentration
 
-| Rule | No fills | Partial legs | Median filled capital | Top-three-game P&L | ROI excluding top three | Equal-game ROI |
-|---|---:|---:|---:|---:|---:|---:|
-| totals-pace-antiextrapolation | 34 | 19 | $2.18 | $214.25 | -56.02% | 107.01% |
-| nrfi-demand-premium | 52 | 77 | $4.64 | $395.97 | -16.65% | -11.45% |
-| runline-1run-spike | 0 | 0 | $0.00 | $0.00 | n/a | n/a |
-| runline-margin-transition | 192 | 123 | $3.72 | $254.93 | -29.44% | -8.80% |
+| Rule | No fills | Partial legs | Median filled capital | Top-three-game P&L | Cash ROI excluding top three | Equal-game ROI | Equal-game 95% CI |
+|---|---:|---:|---:|---:|---:|---:|---|
+| totals-pace-antiextrapolation | 34 | 19 | $2.18 | $214.25 | -56.02% | 107.01% | -1.30% to 223.52% |
+| nrfi-demand-premium | 52 | 77 | $4.64 | $395.97 | -16.65% | -11.45% | -33.40% to 10.99% |
+| runline-1run-spike | 0 | 0 | $0.00 | $0.00 | n/a | n/a | n/a to n/a |
+| runline-margin-transition | 192 | 123 | $3.72 | $254.93 | -29.44% | -8.80% | -30.60% to 15.04% |
 
 ## Coverage and inference
 
@@ -45,7 +60,7 @@ Pair diagnostic: {"n": 112, "median_pair_cost": 1.31358993382521, "median_implie
 Frozen NRFI rates: {"2025": {"games": 9879, "base": 0.48942200627593885}, "2026": {"games": 12251, "base": 0.49212309199249044}}.
 Totals models: {"2025": {"status": "unavailable", "prior_games": 0}, "2026": {"prior_games": 49, "intercept": 0.029152506945383225, "slope": -0.012805487123895079, "zero_crossing": 2.2765636842494303}}. The fitted zero-crossing is reported rather than forced to zero; a nonzero crossing weakens the original mechanism.
 The corrected MLB panel replaces old phantom/duplicate states. Raw transaction timestamps are used without subtracting estimated chain lag. Historical state timestamps stand in for public knowledge; free MLB feed delay measured elsewhere is much longer than the 3s replay assumption. Next-state expiry is analytical censoring, not proof of canceling a pending sports order. Totals can close on crossing the line: results condition on observed state and surviving prints, and do not estimate unconditional late-game pricing error.
-Only the four recovered primary rules and the declared +1c stress were executed. No parameter scan or post-result winning variant is hidden. Models, source file identities, every signal/fill/no-fill, pair references and all four uncapped desk ledgers are saved. Bootstrap intervals resample whole games; fees-inclusive cash weights determine headline ROI. Equal-game ROI and concentration are also reported. A positive point estimate is exploratory until independently collected receipt/depth data validate entry, capacity and a frozen rule.
+Only the four recovered primary rules and the declared +1c stress were executed. No parameter scan or post-result winning variant is hidden. Models, source file identities, every signal/fill/no-fill, pair references and all four uncapped desk ledgers are saved. Both 95% bootstrap intervals use C.cluster_ci with 2,000 whole-game resamples and seed 0: cash intervals divide resampled total net P&L by resampled total fees-inclusive capital; equal-game intervals average the resampled per-game aggregate ROIs. Empty samples have null point estimates and bounds; fewer than five funded games have no interval. Neither interval corrects historical selection or multiple testing. A positive point estimate is exploratory until independently collected receipt/depth data validate entry, capacity and a frozen rule.
 
 The +1c replay retains the original limit: for NRFI it can skip an originally affordable print and take another later print, so its filled sample can change and aggregate ROI need not decrease. This is an executable-limit sensitivity within the transaction proxy, not a same-filled-sample causal cost estimate. Primary and stress Parquets retain every such change.
 
