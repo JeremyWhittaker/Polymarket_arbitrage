@@ -41,8 +41,9 @@ def _load() -> tuple[pd.DataFrame, pd.DataFrame]:
     mk = mk[mk.game_start_ts.notna()]
     f = fills(markets=mk.m.to_numpy(), columns=["m", "s", "w", "ts", "q", "y", "size", "fee_rate", "in_play"])
     f["prior_usd"] = prior_notional(f)
-    keep = f.q.between(0.02, 0.995)  # retain eventual voids in causal strategy selection
-    f = f[keep].copy()
+    # Keep the complete valid tape for later execution and low-price mirror signals.
+    keep = f.q.between(0, 1, inclusive="neither")
+    f = f.loc[keep]
     meta = mk.set_index("m")
     sport_codes, sport_names = pd.factorize(meta.family.to_numpy())
     event_codes, _ = pd.factorize(meta.event_slug.to_numpy())
@@ -57,7 +58,11 @@ def _load() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def calibration_table(f: pd.DataFrame, by_sport: bool = True, phase: str | None = None) -> pd.DataFrame:
-    d = f if phase is None else f[f.in_play == (phase == "in_play")]
+    columns = ["q", "y", "size", "fee_rate", "event"] + (["sport"] if by_sport else [])
+    mask = f.y.ne(.5)
+    if phase is not None:
+        mask &= f.in_play.eq(phase == "in_play")
+    d = f.loc[mask, columns]
     d = d[d.y != .5]  # descriptive win/loss calibration only
     d = d.assign(bucket=pd.cut(d.q, EDGES, include_lowest=True, right=False))
     keys = (["sport"] if by_sport else []) + ["bucket"]
@@ -68,10 +73,11 @@ def calibration_table(f: pd.DataFrame, by_sport: bool = True, phase: str | None 
         usd = (g["size"] * g.q).to_numpy()
         fee = taker_fee(1.0, g.q.to_numpy(), g.fee_rate.to_numpy())
         roi = (g.y.to_numpy() - g.q.to_numpy() - fee) / (g.q.to_numpy() + fee)
-        mean, lo, hi = cluster_ci(roi, g.event.to_numpy(), weights=usd)
+        capital = g["size"].to_numpy() * (g.q.to_numpy() + fee)
+        mean, lo, hi = cluster_ci(roi, g.event.to_numpy(), weights=capital)
         rec = dict(zip(keys, k if isinstance(k, tuple) else (k,)))
         rec.update({
-            "fills": len(g), "usd": float(usd.sum()), "avg_price": float(np.average(g.q, weights=usd)),
+            "fills": len(g), "usd": float(usd.sum()), "capital_usd": float(capital.sum()), "avg_price": float(np.average(g.q, weights=usd)),
             "won_pct": float(np.average(g.y, weights=usd)), "fills_won_pct": float(g.y.mean()),
             "edge_pts": float(np.average(g.y, weights=usd) - np.average(g.q, weights=usd)),
             "roi_after_fee": mean, "ci_lo": lo, "ci_hi": hi,
@@ -279,8 +285,12 @@ def _render(f, overall, cal, pre, live, thr) -> str:
 
 def per_point(f: pd.DataFrame, by: str | None = None, min_fills: int = 400) -> pd.DataFrame:
     """Calibration at 1-percentage-point resolution from 50c up."""
-    d = f[f.q >= 0.495].copy()
-    d["pt"] = np.floor(d.q * 100).astype(int).clip(50, 99)
+    columns = ["q", "y", "fee_rate", "size", "event"] + ([by] if by else [])
+    d = f.loc[f.q >= 0.50, columns]
+    # Compare to edges in the stored price precision: float32(0.53)*100 can
+    # round below 53, even though it represents the nominal 53-cent boundary.
+    edges = (np.arange(50, 101) / 100.).astype(d.q.dtype)
+    d["pt"] = np.clip(np.searchsorted(edges, d.q.to_numpy(), side="right") + 49, 50, 99)
     keys = ([by] if by else []) + ["pt"]
     rows = []
     for k, g in d.groupby(keys, observed=True):
@@ -289,9 +299,10 @@ def per_point(f: pd.DataFrame, by: str | None = None, min_fills: int = 400) -> p
         usd = (g["size"] * g.q).to_numpy()
         fee = taker_fee(1.0, g.q.to_numpy(), g.fee_rate.to_numpy())
         roi = (g.y.to_numpy() - g.q.to_numpy() - fee) / (g.q.to_numpy() + fee)
-        mean, lo, hi = cluster_ci(roi, g.event.to_numpy(), weights=usd)
+        capital = g["size"].to_numpy() * (g.q.to_numpy() + fee)
+        mean, lo, hi = cluster_ci(roi, g.event.to_numpy(), weights=capital)
         rec = dict(zip(keys, k if isinstance(k, tuple) else (k,)))
-        rec.update({"fills": len(g), "games": int(g.event.nunique()), "usd": float(usd.sum()),
+        rec.update({"fills": len(g), "games": int(g.event.nunique()), "usd": float(usd.sum()), "capital_usd": float(capital.sum()),
                     "avg_price": float(np.average(g.q, weights=usd)),
                     "won_pct": float(np.average(g.y, weights=usd)),
                     "edge_pts": float(np.average(g.y, weights=usd) - np.average(g.q, weights=usd)),
@@ -302,8 +313,9 @@ def per_point(f: pd.DataFrame, by: str | None = None, min_fills: int = 400) -> p
 
 def per_point_split(f: pd.DataFrame) -> pd.DataFrame:
     """Same, but dev vs holdout side by side: a real sweet spot must survive out of sample."""
-    dev = per_point(f[f.ts < SPLIT_TS], min_fills=200).set_index("pt")
-    hold = per_point(f[f.ts >= SPLIT_TS], min_fills=200).set_index("pt")
+    columns = ["q", "y", "fee_rate", "size", "event"]
+    dev = per_point(f.loc[f.ts < SPLIT_TS, columns], min_fills=200).set_index("pt")
+    hold = per_point(f.loc[f.ts >= SPLIT_TS, columns], min_fills=200).set_index("pt")
     out = dev.join(hold, lsuffix="_dev", rsuffix="_hold", how="inner").reset_index()
     out["both_positive"] = (out.roi_dev > 0) & (out.roi_hold > 0)
     return out
@@ -393,8 +405,9 @@ def _render_points(f, pts, split, sweep, by_sport, survivors) -> str:
     pos = split[split.both_positive]
     L = ["# Every price point from 50c: is there a sweet spot?", "",
          f"{len(f):,} fills, {f.m.nunique():,} markets (legacy corpus with incomplete lifetime coverage). Each row is one "
-         "cent of price. `roi` is the return per $1 after the market's actual taker fee, with a 95% CI "
-         "clustered by game.", "",
+         "cent of price. `roi` is total net cash divided by capital including fees, with a 95% CI "
+         "clustered by game. Price/payout averages use observed notional weights; void payout is 0.5. "
+         "These descriptive historical tickets are separate from the delayed strategy replay.", "",
          "![points](calibration_points.png)", "",
          "## Every point, all sports", "", _md(pts, cols, ".4f"), "",
          "## The historically explored split", "",
@@ -402,8 +415,10 @@ def _render_points(f, pts, split, sweep, by_sport, survivors) -> str:
          _md(split, sp_cols, ".4f"), "",
          f"Points positive in BOTH windows: **{len(pos)} of {len(split)}** "
          f"({', '.join(str(int(p)) + 'c' for p in pos.pt) if len(pos) else 'none'}).", "",
-         f"Points whose own CI clears zero after correcting for testing {len(pts)} of them: "
-         f"**{len(survivors)}**.", "",
+         f"Exploratory approximate normal/BH screen across {len(pts)} points flags "
+         f"**{len(survivors)}**. It estimates standard errors from bootstrap interval widths; "
+         "the displayed intervals remain unadjusted. This is not a calibrated confirmatory test, "
+         "especially with overlapping price bins, inspected history and asymmetric returns.", "",
          "### What different weights mean", "",
          "Dollar weighting is descriptive of historical tickets. Equal-dollar, proportional, and one-per-event "
          "policies are each legitimate if weights are known at signal time and exposure and capacity are enforced. "

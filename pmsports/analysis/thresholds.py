@@ -152,7 +152,9 @@ def inning_discounts() -> dict[str, pd.DataFrame]:
     for (inn, lead), g in first.groupby(["inn", "lead"]):
         cells.append(dict(inn=inn, lead=lead, **_execution_summary(g, g["diff"] > 0)))
     p["we"], p["y"] = p.fair_home, p.home_won_final.astype(float)
-    tr, te = p[p.event_date < "2026-01-01"], p[p.event_date >= "2026-01-01"].copy()
+    model_ok = np.isfinite(_features(p)).all(axis=1) & p.pre_p.between(.02, .98)
+    model_rows = p.loc[model_ok]
+    tr, te = model_rows[model_rows.event_date < "2026-01-01"], model_rows[model_rows.event_date >= "2026-01-01"].copy()
     adj = []
     if len(tr) >= 100 and len(te):
         X = _features(tr)
@@ -168,7 +170,8 @@ def inning_discounts() -> dict[str, pd.DataFrame]:
                 adj.append(dict(model_edge_at_least=x, buy=label,
                     **_execution_summary(g, (g["diff"] > 0) == leading)))
     return dict(describe=pd.DataFrame(desc), rules=pd.DataFrame(rules), cells=pd.DataFrame(cells),
-                adjusted=pd.DataFrame(adj), n_checkpoints=len(p), n_games=p.game_pk.nunique())
+                adjusted=pd.DataFrame(adj), n_checkpoints=len(p), n_games=p.game_pk.nunique(),
+                model_input_exclusions=int((~model_ok).sum()))
 
 
 def _ci_cluster(g: pd.DataFrame, n_boot=1000, seed=3) -> str:
@@ -223,5 +226,6 @@ def _render(a, b) -> str:
          "By inning x lead (discount >= 3 pts, first signal per game):", "", _md(b["cells"]), "",
          "### Same rule with a fair value that knows team strength (fit on 2025, tested on 2026)", "",
          "Fair value = logistic model on the historical state rate + pregame odds + how much game is left. "
-         "Buy whichever side the model says is cheap by at least X.", "", _md(b["adjusted"]), ""]
+         "Buy whichever side the model says is cheap by at least X. "
+         f"Excluded {b['model_input_exclusions']:,} checkpoints from this adjusted model because required inputs were missing or outside the declared 2–98c pregame range; the unadjusted rule retains them.", "", _md(b["adjusted"]), ""]
     return "\n".join(L)

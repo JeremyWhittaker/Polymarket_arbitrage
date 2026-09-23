@@ -252,12 +252,9 @@ def mlb_inning_discount_ledger(discount=.03):
 def mlb_fair_value_ledger(threshold=.02):
     """Match H3 fit/signal selection; use its shared execution adapter, never signal price."""
     import statsmodels.api as sm
-    from ..analysis.hypotheses import _baseline_we,_features
+    from ..analysis.hypotheses import causal_model_rows,_features
     panel,base = _panel_inputs()
-    df = panel.dropna(subset=["mkt_p","pre_p","home_won_final"]).copy()
-    df = df[df.pre_p.between(.02,.98) & df.mkt_staleness.le(120)]
-    df["we"] = _baseline_we(base,df,max_season=2025)
-    df["y"] = df.home_won_final.astype(float)
+    df = causal_model_rows(panel,base,"2026-01-01")
     tr,te = df[df.event_date < "2026-01-01"],df[df.event_date >= "2026-01-01"].copy()
     if len(tr) < 1000 or len(te) < 1000:
         raise ValueError(f"H3 cannot estimate ledger: insufficient rows ({len(tr)}train/{len(te)}test)")

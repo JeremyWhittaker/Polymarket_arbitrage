@@ -100,7 +100,7 @@ def h2_state_tables(panel: pd.DataFrame, baseline: pd.DataFrame) -> dict:
     out["baseline_seasons"] = sorted(b.season.unique().tolist())
 
     # Market: same cells, what did Polymarket price the leader at, and how did they do
-    p = panel[panel.checkpoint & (panel.half == "top") & (panel["diff"] != 0)].copy()
+    p = panel[panel.checkpoint & (panel.half == "top") & (panel["diff"] != 0) & panel.mkt_p.notna() & panel.mkt_staleness.le(120)].copy()
     p["lead"] = np.minimum(p["diff"].abs(), 6)
     p["leader_is_home"] = p["diff"] > 0
     p["leader_p"] = np.where(p.leader_is_home, p.mkt_p, 1 - p.mkt_p)
@@ -112,9 +112,13 @@ def h2_state_tables(panel: pd.DataFrame, baseline: pd.DataFrame) -> dict:
                                           mkt_p90=("leader_p", lambda x: x.quantile(.9)),
                                           actual_win=("leader_won", "mean"))
     g["edge_actual_minus_mkt"] = g.actual_win - g.mkt_mean
-    # t-stat of (won - price) per cell: is the market systematically off in this state?
-    resid = (p.leader_won - p.leader_p).groupby([p.inning, p.lead])
-    g["t_stat"] = resid.mean() / (resid.std() / np.sqrt(resid.size()))
+    # Multiple checkpoints within a game are not independent observations.
+    uncertainty = []
+    for (inning, lead), cell in p.groupby(["inning", "lead"]):
+        _, lo, hi = cluster_ci(cell.leader_won-cell.leader_p, cell.game_pk.to_numpy())
+        uncertainty.append(dict(inning=inning, lead=lead, residual_ci_lo=lo, residual_ci_hi=hi))
+    if uncertainty:
+        g = g.join(pd.DataFrame(uncertainty).set_index(["inning", "lead"]))
     base = b.groupby(["inning", "lead"]).leader_won.mean().rename("baseline_win")
     g = g.join(base)
     out["market_cells"] = g.reset_index()
@@ -159,15 +163,29 @@ def _features(df: pd.DataFrame) -> pd.DataFrame:
                          "lg_pre_x_left": logit(df.pre_p) * left, "left": left}, index=df.index)
 
 
+def causal_model_rows(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str) -> pd.DataFrame:
+    """Keep known model inputs; training-state rates exclude their own season outcomes.
+
+    The evaluation baseline is frozen at the split year minus one. The training
+    rows use earlier seasons individually, so their labels cannot encode themselves.
+    """
+    df = panel.dropna(subset=["mkt_p", "pre_p", "home_won_final"]).copy()
+    df = df[df.pre_p.between(.02, .98) & df.mkt_p.between(0, 1) & df.mkt_staleness.le(120)]
+    df["we"] = np.nan
+    seasons = df.event_date.str[:4].astype(int)
+    for season in sorted(seasons.unique()):
+        mask = seasons.eq(season)
+        df.loc[mask, "we"] = _baseline_we(baseline, df.loc[mask].copy(),
+                                             max_season=min(season-1, int(split_date[:4])-1))
+    df["y"] = df.home_won_final.astype(float)
+    return df
+
+
 def h3_fair_value(panel: pd.DataFrame, baseline: pd.DataFrame, split_date: str,
                   slip: float = 0.01) -> dict:
     """Out-of-sample: fit P(home wins | pregame price, state) on games before split_date,
     then trade games on/after it whenever the model and market disagree by > threshold."""
-    df = panel.dropna(subset=["mkt_p", "pre_p", "home_won_final"]).copy()
-    df = df[df.pre_p.between(0.02, 0.98) & df.mkt_staleness.le(120)]
-    split_season = int(split_date[:4])
-    df["we"] = _baseline_we(baseline, df, max_season=split_season - 1)
-    df["y"] = df.home_won_final.astype(float)
+    df = causal_model_rows(panel, baseline, split_date)
     train, test = df[df.event_date < split_date], df[df.event_date >= split_date]
     if len(train) < 1000 or len(test) < 1000:
         return {"error": f"not enough rows (train {len(train)}, test {len(test)})"}
