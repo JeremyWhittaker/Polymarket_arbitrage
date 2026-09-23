@@ -278,7 +278,7 @@ def copy_wallets_ledger(delay=30):
     from ..wallets.tapes import load_trades
     u = pd.read_parquet(DATA_DIR / "wallets" / "universe.parquet")
     meta = u.drop_duplicates("condition_id").set_index("condition_id")
-    t = load_trades(u)
+    t = skill.valid_trades(load_trades(u))
     s1 = skill.wallet_stats(skill.positions(t[study._causal_cutoff(t,SPLIT_TS,meta)]))
     fdr = skill.fdr_survivors(s1[s1.markets >= study.MIN_MKTS].z).tolist()
     t2 = t[t.timestamp >= SPLIT_TS]
@@ -289,18 +289,26 @@ def copy_wallets_ledger(delay=30):
     def col(name):
         return cp[f"{pref}{name}_d{delay}"]
     price = cp[f"{pref}q_d{delay}"]
+    labels = u[["condition_id", "outcome_idx", "outcome"]].drop_duplicates()
+    labels = labels.loc[~labels.duplicated(["condition_id", "outcome_idx"], keep=False)]
+    labels = labels.pivot(index="condition_id", columns="outcome_idx", values="outcome").reindex(columns=[0,1])
+    sides = [cp.condition_id.map(labels[s]).astype("string").fillna("Outcome unavailable") for s in (0,1)]
+    filled = col("shares").gt(0)
     led = pd.DataFrame(dict(period="holdout",sport=cp.family.astype(str),league="",event=cp.event_slug.astype(str),
-        market=cp.condition_id.astype(str),side=np.where(cp.side_idx == 0,"outcome0","outcome1"),
+        market=cp.condition_id.map(meta.market_slug).astype("string").fillna("Market unavailable"),
+        side=np.where(cp.side_idx == 0,sides[0],sides[1]),
         signal_ts=col("signal_ts"),receipt_ts=col("receipt_ts"),eligible_ts=col("eligible_ts"),expiry_ts=col("expiry_ts"),
         entry_ts=col("fill_ts"),entry_price=price,shares=col("shares"),stake_usd=col("stake_usd"),
         fee_usd=col("fee_usd"),cost_usd=col("cost_usd"),payout=col("payout"),pnl_usd=col("pnl_usd"),roi=col("roi"),
-        print_id=col("print_id"),status=col("status"),exit_kind="resolution",exit_ts=cp.condition_id.map(meta.closed_ts).astype(float),
-        exit_price=cp.y,reference_price=cp.q,note="Causal FDR selection; proportional1% leader-notional target capped100/event; all no-fills retained"))
+        print_id=col("print_id"),status=col("status"),exit_kind=np.where(filled,"resolution","unfilled"),
+        exit_ts=cp.condition_id.map(meta.closed_ts).astype(float).where(filled),
+        exit_price=cp.y.where(filled),reference_price=cp.q,
+        note="Causal FDR selection; proportional1% leader-notional target capped100/event; all no-fills retained; condition="+cp.condition_id.astype(str)))
     return _write(_meta("copy_skilled_wallets","Copy historically selected wallets: capped proportional policy",
         "pmsports/wallets/skill.py","reports/WALLETS.md",
         f"Rank only trades and settled outcomes known before2026; FDR survivors with >={study.MIN_MKTS}markets; first later other-wallet same-side print strictly after{delay}s;1% leader notional capped100/order/event",
         extra=("Whole2026 evaluation is one event-cap replay; monthly walk-forward has a different monthly reset scope",
-               "This full FDR-decomposition ledger differs from any event-sampled headline comparison; no execution rows are rescaled")),led)
+               "All selected valid signals are retained; no comparison or ledger samples future events or rescales execution rows")),led)
 
 
 def run():

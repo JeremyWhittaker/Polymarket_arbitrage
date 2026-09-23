@@ -139,6 +139,8 @@ def wallet_tape():
 def test_wallet_adapter_uses_settled_ranking_and_proportional_allocations(monkeypatch,tmp_path):
     from pmsports.wallets import skill,tapes,study
     u=pd.DataFrame(dict(condition_id=['old','unsettled','new','missing'],closed_ts=[led.SPLIT_TS-1,led.SPLIT_TS+1,led.SPLIT_TS+100,led.SPLIT_TS+100]))
+    u=pd.concat([u.assign(outcome_idx=0,outcome='Away'),u.assign(outcome_idx=1,outcome='Home')],ignore_index=True)
+    u['market_slug']=u.condition_id+'-market'
     monkeypatch.setattr(pd,'read_parquet',lambda *a,**kw:u)
     monkeypatch.setattr(tapes,'load_trades',lambda universe:wallet_tape())
     actual=skill.positions
@@ -157,7 +159,12 @@ def test_wallet_adapter_uses_settled_ranking_and_proportional_allocations(monkey
     assert d.shares.iloc[0]<2 and d.stake_usd.iloc[0]<.5
     assert d.entry_ts.iloc[0]==led.SPLIT_TS+14
     assert d.cost_usd.iloc[1]==0
-    assert d.exit_ts.eq(led.SPLIT_TS+100).all()
+    assert d.exit_ts.iloc[0]==led.SPLIT_TS+100 and pd.isna(d.exit_ts.iloc[1])
+    assert d.exit_kind.tolist()==['resolution','unfilled']
+    assert pd.isna(d.exit_price.iloc[1])
+    assert d.side.tolist()==['Away','Away']
+    assert d.market.tolist()==['new-market','missing-market']
+    assert 'condition=new' in d.note.iloc[0]
 
 
 def esports_bets():
