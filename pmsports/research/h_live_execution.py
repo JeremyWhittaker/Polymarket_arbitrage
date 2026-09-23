@@ -67,6 +67,7 @@ def metadata(day, out):
         response = json.loads(file.read_text())
         exact = [v for v in response if v.get('conditionId') == cid and v.get('closed')]
         row['y_home'] = row['y_away'] = np.nan
+        row['resolution_ts'] = np.nan
         row['resolution_status'] = 'unverified'
         if len(exact) == 1:
             g = exact[0]
@@ -75,6 +76,9 @@ def metadata(day, out):
             if yh in (0., .5, 1.) and ya in (0., .5, 1.) and yh + ya == 1:
                 row['y_home'], row['y_away'] = yh, ya
                 row['resolution_status'] = 'actual token payout verified'
+                closed = pd.to_datetime(g.get('closedTime'), utc=True, errors='coerce')
+                if pd.notna(closed):
+                    row['resolution_ts'] = closed.timestamp()
         records[int(row['game_pk'])] = row
     return records
 
@@ -253,11 +257,23 @@ class Experiment:
         for r in self.audit:
             y = self.meta[r['game_pk']].get('y_' + str(r['side']), np.nan)
             r['settlement_price'] = y
+            r['book_exit_ts'] = r['exit_ts']
+            r['resolution_ts'] = self.meta[r['game_pk']].get('resolution_ts', np.nan)
+            r['exit_price'] = np.nan
+            r['exit_kind'] = None
             if r['shares'] > 0:
                 r['payout'] = r['residual_shares'] * y if r['residual_shares'] > 1e-10 else 0.
                 r['pnl_usd'] = r['exit_proceeds'] + r['payout'] - r['cost_usd']
                 r['deployed_usd'] = r['cost_usd'] + r['exit_fee_usd']
                 r['roi'] = r['pnl_usd'] / r['deployed_usd']
+                # Standard desk exit price is gross cash returned per acquired share.
+                # Keep book exits and residual settlement separately auditable.
+                r['exit_price'] = (r['exit_proceeds'] + r['exit_fee_usd'] + r['payout']) / r['shares']
+                if r['residual_shares'] > 1e-10:
+                    r['exit_kind'] = 'book exits + residual resolution' if r['exit_shares'] > 0 else 'resolution'
+                    r['exit_ts'] = max(r['book_exit_ts'], r['resolution_ts']) if math.isfinite(r['book_exit_ts']) and math.isfinite(r['resolution_ts']) else r['resolution_ts']
+                else:
+                    r['exit_kind'] = r.get('last_exit_reason', 'book exit').split(':')[0].replace('_', ' ')
             else:
                 r['deployed_usd'] = 0.
         if not self.audit:
@@ -326,7 +342,6 @@ def run(day):
         ledger['date'] = day
         # Desk payout is total returned cash, including actual modeled exit receipts.
         ledger['payout'] = ledger.payout + ledger.exit_proceeds
-        ledger['exit_kind'] = 'target/60s timeout; residual settlement' if policy.startswith('mean') else 'settlement'
         ledger['fee_usd'] = ledger.fee_usd + ledger.exit_fee_usd
         # Exit fees are already netted from proceeds: use gross proceeds for the ledger cash identity.
         ledger['payout'] += ledger.exit_fee_usd

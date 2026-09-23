@@ -71,7 +71,7 @@ def test_malformed_update_cannot_freshen_and_sell_requires_position():
 
 def fixture():
     meta={1:dict(slug='game',home_token='t',away_token='a',fee_rate=.05,
-                 resolution_status='verified',y_home=1.,y_away=0.)}
+                 resolution_status='verified',resolution_ts=20.,y_home=1.,y_away=0.)}
     cells=pd.DataFrame([dict(inning=8,half='bottom',outs=1,bases=0,diff=0,mu=.7,sd=.1,games=30)])
     return Experiment(meta,cells)
 
@@ -93,6 +93,24 @@ def test_entry_uses_later_depth_and_residual_settles_after_partial_exit():
     assert r['exit_shares']==2 and r['residual_shares']==8
     sim.pending=[];audit=sim.finish().iloc[0]
     assert audit.pnl_usd==pytest.approx(audit.exit_proceeds+8-audit.cost_usd)
+    assert audit.exit_price==pytest.approx(.94)
+    assert audit.book_exit_ts==8 and audit.exit_ts==20
+    assert audit.exit_kind=='book exits + residual resolution'
+
+
+def test_full_book_exit_and_no_fill_have_correct_exit_price_and_clock():
+    sim=fixture();sim.book.apply(1000,snapshot(ask=.5,size=10))
+    e=dict(kind='score',game_pk=1,recv_ms=1001,feed='mlb',side='home')
+    r=sim.row(e,'mean_reversion_3s','home');sim.enter(r,1001,3)
+    sim.execute(4001,'entry',r)
+    sim.book.apply(5000,snapshot(bid=.7,ask=.8,size=20))
+    sim.execute(8000,'timeout_exit',r)
+    nofill=sim.row(e,'mlb_score_3s','home')
+    audit=sim.finish()
+    assert audit.iloc[0].exit_ts==8 and audit.iloc[0].exit_price==pytest.approx(.7)
+    assert audit.iloc[0].exit_kind=='timeout exit' and audit.iloc[0].residual_shares==0
+    assert math.isnan(nofill['exit_price']) and math.isnan(nofill['exit_ts'])
+    assert nofill['exit_kind'] is None
 
 
 def test_mean_cells_ignore_future_and_weight_games_equally():
