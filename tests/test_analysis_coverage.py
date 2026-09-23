@@ -85,7 +85,7 @@ def test_price_point_projection_preserves_full_cash_statistics():
 
 def test_full_tape_retains_mirror_and_high_price_boundaries(monkeypatch):
     from pmsports.analysis import calibration as C
-    prices=[0.,.009,.01,.499,.50,.995,.999,1.]
+    prices=[-2.,.009,.01,.499,.50,.995,.999,1.]
     frame=pd.DataFrame(dict(m=[1]*8,s=[0]*8,w=list(range(8)),ts=list(range(8)),
         q=prices,y=[1.]*8,size=[1.]*8,fee_rate=[0.]*8,in_play=[False]*8))
     monkeypatch.setattr(C,'markets',lambda:pd.DataFrame(dict(m=[1],family=['baseball'],
