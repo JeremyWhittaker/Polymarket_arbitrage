@@ -40,10 +40,10 @@ def _load() -> tuple[pd.DataFrame, pd.DataFrame]:
     mk = markets()
     mk = mk[mk.game_start_ts.notna()]
     f = fills(markets=mk.m.to_numpy(), columns=["m", "s", "w", "ts", "q", "y", "size", "fee_rate", "in_play"])
-    f["prior_usd"] = prior_notional(f)
     # Keep the complete valid tape for later execution and low-price mirror signals.
     keep = f.q.between(0, 1, inclusive="neither")
     f = f.loc[keep]
+    f["prior_usd"] = prior_notional(f)
     meta = mk.set_index("m")
     sport_codes, sport_names = pd.factorize(meta.family.to_numpy())
     event_codes, _ = pd.factorize(meta.event_slug.to_numpy())
