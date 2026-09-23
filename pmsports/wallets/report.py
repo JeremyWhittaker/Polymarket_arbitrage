@@ -219,10 +219,14 @@ def _render(t, fams, rules, decs, big, wfa, lb, split, dec_sk=None, run_id="") -
           "sampling or row truncation; the full FDR ledger also includes all signals. Invalid price, size, "
           "fee, side or payout inputs cannot rank a wallet or allocate a copied order.", "", _md(wfa), ""]
     bc = ["min_usd", "phase", "trades", "leader_roi", "copy_d0", "copy_d5", "copy_d30", "copy_d30_ci",
-          "copy_d60", "price_move_5min"]
+          "copy_d60", "funded_move_5_10min", "move_funded_signals"]
     L += ["## 4. Follow the big money (any wallet, 2026)", "",
-          "Copy every taker trade >= $X. `price_move_5min` = how far the side's price moved the leader's "
-          "way within 5 minutes (informed money moves prices; ~0 means no information).", "",
+          "Copy every taker trade >= $X. `funded_move_5_10min` is the unweighted mean copied-entry "
+          "price minus leader signal price, only for actually funded equal-target orders. The candidate "
+          "print must be strictly after signal+300 seconds and before signal+600 seconds: the300-second "
+          "horizon begins after the300-second delay. `move_funded_signals` counts that cohort. Event caps, "
+          "shared print capacity and no-fills determine which observations enter this conditional diagnostic; "
+          "it is neither an exact-five-minute markout nor an unconditional test of information.", "",
           _md(big[[c for c in bc if c in big.columns]], ".4f"), ""]
     if dec_sk is not None and len(dec_sk):
         a = dec_sk.attrs

@@ -81,16 +81,22 @@ def evaluate(t2: pd.DataFrame, s2: pd.DataFrame, wallets: list[str], rows_cache:
         rows = t2[t2.proxyWallet.isin(ws)]
         if "_groups" not in rows_cache:
             rows_cache["_groups"] = skill.build_groups(t2)
-        rows_cache[key] = skill.copy_prices(t2, rows, delays=DELAYS, groups=rows_cache["_groups"])
-    rows = rows_cache[key]
-    for d in DELAYS:
-        c = skill.summarize_copy(skill.copy_returns(rows, d, stake="equal"))
-        out[f"copy_d{d}_roi"] = c["roi"]
-        out[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
-        out[f"copy_d{d}_trades"] = c["trades"]
-    # mirror their $ sizing too (big conviction bets weigh more)
-    c = skill.summarize_copy(skill.copy_returns(rows, 30, stake="proportional"))
-    out["copy_d30_prop_roi"], out["copy_d30_prop_ci"] = c["roi"], f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
+        summary = {}
+        # Every signal is still replayed. Keep only one delay's audit in memory,
+        # and retain small summaries across wallet selections rather than wide frames.
+        for d in DELAYS:
+            copied = skill.copy_prices(t2, rows, delays=(d,), groups=rows_cache["_groups"])
+            c = skill.summarize_copy(skill.copy_returns(copied, d, stake="equal"))
+            summary[f"copy_d{d}_roi"] = c["roi"]
+            summary[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
+            summary[f"copy_d{d}_trades"] = c["trades"]
+            if d == 30:
+                c = skill.summarize_copy(skill.copy_returns(copied, d, stake="proportional"))
+                summary["copy_d30_prop_roi"] = c["roi"]
+                summary["copy_d30_prop_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
+            del copied
+        rows_cache[key] = summary
+    out.update(rows_cache[key])
     return out
 
 
@@ -173,8 +179,9 @@ def big_trade_signal(t2: pd.DataFrame, thresholds=(1_000, 10_000, 50_000), delay
                 c = skill.summarize_copy(skill.copy_returns(part, d))
                 rec[f"copy_d{d}"] = c["roi"]
                 rec[f"copy_d{d}_ci"] = f"{c['ci_lo']:+.3f}..{c['ci_hi']:+.3f}"
-            # information: does the side's price move the leader's way within 5 minutes?
-            rec["price_move_5min"] = float((part.q_d300 - part.q).mean())
+            # This is conditional on an allocated later order, not an exact-time markout.
+            rec["funded_move_5_10min"] = float((part.q_d300 - part.q).mean())
+            rec["move_funded_signals"] = int(part.q_d300.notna().sum())
             rows.append(rec)
     return pd.DataFrame(rows)
 

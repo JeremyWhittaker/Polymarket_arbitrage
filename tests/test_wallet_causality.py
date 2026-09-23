@@ -146,7 +146,7 @@ def test_wallet_comparison_does_not_sample_future_event_set(monkeypatch):
     monkeypatch.setattr(study.skill,'summarize_copy',lambda rows:dict(roi=0.,ci_lo=0.,ci_hi=0.,trades=len(rows)))
     stats=pd.DataFrame(dict(markets=[20],staked=[100.],pnl=[1.],pnl_net=[.5]),index=['w1'])
     got=study.evaluate(rows,stats,['w1'],{})
-    assert captured==[20] and got['copy_d30_trades']==20
+    assert captured==[20]*len(study.DELAYS) and got['copy_d30_trades']==20
 
 
 def test_monthly_default_keeps_more_than_old_40000_signal_limit(monkeypatch):
@@ -163,3 +163,76 @@ def test_monthly_default_keeps_more_than_old_40000_signal_limit(monkeypatch):
     monkeypatch.setattr(study.skill,'copy_returns',lambda rows,*a,**kw:rows.assign(copy_roi=.1,w=1.))
     got=study.walk_forward(both,'2025-02-01','2025-03-01',rules=('z',),delays=(0,),meta=meta)
     assert got.trades.tolist()==[40001] and got.staked.tolist()==[40001.]
+
+
+def _copy_fixture():
+    rows=[]
+    for event, start, won in [('a',100.,1.),('b',1000.,0.)]:
+        for delay, wallet, price in [(0.,'leader',.5),(6.,'other',.55),(31.,'other',.6),(61.,'other',.65)]:
+            rows.append(dict(timestamp=start+delay,condition_id=event,proxyWallet=wallet,
+                size=100.,side_idx=0,q=price,y=won,fee_rate=.05,in_play=False,
+                family='soccer',event_slug=event))
+    t=pd.DataFrame(rows)
+    for col in ('condition_id','proxyWallet','family','event_slug'):
+        t[col]=t[col].astype('category')
+    return t
+
+
+def test_evaluation_caches_small_summaries_and_matches_full_audit(monkeypatch):
+    from pmsports.wallets import skill
+    t=_copy_fixture();signals=t[t.proxyWallet=='leader']
+    stats=skill.wallet_stats(skill.positions(t))
+    full=skill.copy_prices(t,signals,delays=study.DELAYS)
+    expected={}
+    for delay in study.DELAYS:
+        summary=skill.summarize_copy(skill.copy_returns(full,delay))
+        expected.update({f'copy_d{delay}_roi':summary['roi'],
+            f'copy_d{delay}_ci':f"{summary['ci_lo']:+.3f}..{summary['ci_hi']:+.3f}",
+            f'copy_d{delay}_trades':summary['trades']})
+    summary=skill.summarize_copy(skill.copy_returns(full,30,stake='proportional'))
+    expected.update(copy_d30_prop_roi=summary['roi'],
+        copy_d30_prop_ci=f"{summary['ci_lo']:+.3f}..{summary['ci_hi']:+.3f}")
+    calls=[];original=skill.copy_prices
+    def capture(*args,**kwargs):
+        calls.append(kwargs['delays'])
+        return original(*args,**kwargs)
+    monkeypatch.setattr(skill,'copy_prices',capture)
+    cache={}
+    result=study.evaluate(t,stats,['leader'],cache)
+    assert calls==[(d,) for d in study.DELAYS]
+    assert {key:result[key] for key in expected}==expected
+    assert cache[('leader',)]==expected
+    assert all(np.isscalar(value) for value in cache[('leader',)].values())
+    def forbidden(*args,**kwargs):raise AssertionError('same selected wallets should reuse summary')
+    monkeypatch.setattr(skill,'copy_prices',forbidden)
+    monkeypatch.setattr(skill,'build_groups',forbidden)
+    again=study.evaluate(t,stats,['leader','inactive'],cache)
+    assert again['selected']==2 and again['active_p2']==1
+    assert {key:again[key] for key in expected}==expected
+
+
+def test_funded_move_is_strictly_between_five_and_ten_minutes(monkeypatch,tmp_path):
+    from pmsports.wallets import skill
+    t=_copy_fixture()
+    # Signal A has a print at exactly five minutes, then at five minutes + one second.
+    # Signal B only has prints on the excluded endpoints.
+    t.loc[t.condition_id=='a','timestamp']=[100.,400.,401.,700.]
+    t.loc[t.condition_id=='b','timestamp']=[1000.,1300.,1600.,1700.]
+    t.loc[t.proxyWallet=='leader','size']=2000.
+    signals=t[t.proxyWallet=='leader']
+    audit=skill.copy_prices(t,signals,delays=(300,))
+    assert audit.eligible_ts_d300.tolist()==[400.,1300.]
+    assert audit.expiry_ts_d300.tolist()==[700.,1600.]
+    assert audit.fill_ts_d300.iloc[0]==401. and pd.isna(audit.fill_ts_d300.iloc[1])
+    result=study.big_trade_signal(t,thresholds=(1000,),delays=())
+    all_rows=result[result.phase=='all'].iloc[0]
+    assert all_rows['funded_move_5_10min']==pytest.approx(.1)
+    assert all_rows['move_funded_signals']==1 and all_rows['trades']==2
+    assert 'price_move_5min' not in result
+    monkeypatch.setattr(report,'OUT',tmp_path)
+    rules=pd.DataFrame(columns=['family','rule','selected','active_p2','p1_roi','p1_median_z',
+        'p2_roi','p2_roi_net_fee','copy_d0_roi','copy_d5_roi','copy_d30_roi','copy_d30_ci','copy_d60_roi','copy_d30_prop_roi'])
+    text=report._render(t,pd.DataFrame(),rules,pd.DataFrame(),result,pd.DataFrame(),pd.DataFrame(),'2026-01-01')
+    assert 'strictly after signal+300 seconds and before signal+600 seconds' in text
+    assert 'only for actually funded equal-target orders' in text
+    assert 'move_funded_signals' in text and '~0 means no information' not in text
