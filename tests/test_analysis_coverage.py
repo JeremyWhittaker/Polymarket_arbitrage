@@ -107,3 +107,15 @@ def test_float32_nominal_cent_boundaries_keep_their_bins():
     result=per_point(frame,min_fills=1)
     assert result.pt.tolist()==list(range(50,100))
     assert result.fills.eq(1).all()
+
+
+def test_bounded_volume_matches_full_history_with_ties_and_unsorted_rows():
+    from pmsports.analysis.calibration import bounded_prior_notional
+    from pmsports.execution import prior_notional
+    rng = np.random.default_rng(19)
+    tape = pd.DataFrame({'m':np.repeat(np.arange(7),31), 'ts':rng.integers(0,9,217),
+                         'q':rng.uniform(.01,.99,217), 'size':rng.uniform(1,100,217)})
+    for frame in (tape, tape.sample(frac=1,random_state=5)):
+        for limit in (1,31,50,1000):
+            np.testing.assert_allclose(bounded_prior_notional(frame,limit),prior_notional(frame),rtol=1e-12,atol=1e-10)
+    assert bounded_prior_notional(tape.iloc[:0]).size==0

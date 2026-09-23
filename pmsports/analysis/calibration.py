@@ -35,15 +35,45 @@ EDGES = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.925, 0.95, 0.96
 SPORTS = ["baseball", "soccer", "american_football", "basketball", "tennis", "esports", "hockey"]
 
 
+def bounded_prior_notional(f: pd.DataFrame, batch_rows: int = 1_000_000) -> np.ndarray:
+    """Exact strictly prior volume in whole-market batches, including timestamp ties.
+
+    Compact storage groups markets contiguously. A complete market is never split,
+    so batching preserves the original accumulation and requires no carried history.
+    Unordered callers are restored to their original row order after stable sorting.
+    """
+    if batch_rows <= 0:
+        raise ValueError("batch_rows must be positive")
+    if f.empty:
+        return np.array([], dtype=float)
+    codes = f.m.to_numpy()
+    starts = np.flatnonzero(np.r_[True, codes[1:] != codes[:-1]])
+    if len(pd.unique(codes[starts])) != len(starts):
+        order = np.argsort(codes, kind="stable")
+        out = np.empty(len(f), dtype=float)
+        out[order] = bounded_prior_notional(f.iloc[order], batch_rows)
+        return out
+    out = np.empty(len(f), dtype=float)
+    lo = previous = 0
+    for hi in np.r_[starts[1:], len(f)]:
+        if hi - lo > batch_rows and previous > lo:
+            out[lo:previous] = prior_notional(f.iloc[lo:previous])
+            lo = previous
+        previous = int(hi)
+    out[lo:] = prior_notional(f.iloc[lo:])
+    return out
+
+
 def _load() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Compact fill frame: ids stay integer codes (35M event-slug strings would cost GBs)."""
+    """Keep integer IDs and bound working memory without dropping any valid fills."""
     mk = markets()
     mk = mk[mk.game_start_ts.notna()]
     f = fills(markets=mk.m.to_numpy(), columns=["m", "s", "w", "ts", "q", "y", "size", "fee_rate", "in_play"])
     # Keep the complete valid tape for later execution and low-price mirror signals.
     keep = f.q.between(0, 1, inclusive="neither")
-    f = f.loc[keep]
-    f["prior_usd"] = prior_notional(f)
+    f = f.loc[keep].reset_index(drop=True)
+    log.info("loaded %d valid prints; accumulating volume in whole-market batches", len(f))
+    f["prior_usd"] = bounded_prior_notional(f)
     meta = mk.set_index("m")
     sport_codes, sport_names = pd.factorize(meta.family.to_numpy())
     event_codes, _ = pd.factorize(meta.event_slug.to_numpy())
