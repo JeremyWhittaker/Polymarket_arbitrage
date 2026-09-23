@@ -160,3 +160,34 @@ def test_fully_unwound_pair_exit_clock_is_actual_sale_not_settlement():
     d=H.pair_replay(pd.DataFrame([signal()]),t).iloc[0]
     assert d.sold_a==100 and d.residual_a==0
     assert d.exit_ts==14 and d.exit_price==pytest.approx(.6)
+
+
+def test_current_raw_score_gate_rejects_manufactured_six_without_future_quality():
+    games=pd.DataFrame([dict(espn_id=401858429,m=1,condition_id='c',home_idx=0,lg='cfb',league='cfb',fee_rate=0.,
+        espn_date=0.,closed_ts=1000.,home_abbr='H',away_abbr='A',game_ok=True,q_final_ok=True)])
+    raw=pd.DataFrame([dict(espn_id=401858429,play_idx=116+i,wallclock=float(i+1),period=2 if i<39 else 3,
+        clock_s=900-i,home_score=27.,away_score=21. if i<39 else 20.,type='Rush',end_home=1,reg_s=1000-i)
+        for i in range(42)])
+    # Actual reported defect: play155 has raw27–20 but running-max scores27–21.
+    raw.loc[40,'home_score']=26. # Even equal raw/repaired margins do not excuse unequal team scores.
+    states=W.causal_states(raw,games)
+    row=states[states.play_idx==155].iloc[0]
+    assert row.raw_margin==7 and row.margin==6 and row.stable and row.prefix_ok
+    assert not row.current_score_agreement and not W.state_eligible(states).any()
+    equal_margin=states[states.play_idx==156].iloc[0]
+    assert equal_margin.raw_margin==equal_margin.margin==6 and not equal_margin.current_score_agreement
+    games['game_ok']=False;games['q_final_ok']=False
+    future=pd.DataFrame([{**raw.iloc[-1].to_dict(),'play_idx':158,'wallclock':100.,'home_score':99.,'away_score':88.}])
+    changed=W.causal_states(pd.concat([raw,future]),games).iloc[:len(states)]
+    pd.testing.assert_series_equal(W.state_eligible(states),W.state_eligible(changed))
+    pd.testing.assert_frame_equal(states[['raw_margin','margin','current_score_agreement']],
+                                  changed[['raw_margin','margin','current_score_agreement']])
+
+
+def test_positive_control_defeats_mechanism_even_when_interval_includes_loss():
+    control={'roi':.003575,'ci_lo':-.312,'ci_hi':.244,'bets':21}
+    verdict=W.control_criterion(control)
+    assert verdict['status']=='failed' and verdict['mechanism_verdict']=='DEAD'
+    assert verdict['control_holdout']==control and 'not a significance test' in verdict['uncertainty']
+    assert W.control_criterion({**control,'roi':-.01})['status']=='not_triggered'
+    assert W.control_criterion({**control,'roi':None})['status']=='unavailable'

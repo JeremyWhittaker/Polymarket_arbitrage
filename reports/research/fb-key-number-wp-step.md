@@ -1,25 +1,43 @@
 # fb-key-number-wp-step
 
-**No executable edge established.** These are corrected historical transaction proxies, not observed fills available to a new order.
+**No executable edge established.**
 
-Reconstruct raw cached plays with prefix-only timestamps and score/clock quality. Stable Q3/Q4 football leader at margin 3/6/7, positive regulation time, last prior raw price within 3c of the original frozen smooth DEV model and no older than 300s. First signal per game; no future has_price or entry-price filter. Buy strictly after 3s, before next state/120s, using one print and at most $100 actual capital.
+**Original key-specific mechanism criterion: DEAD** (failed).
 
-The July–September 2026 window and related variants were already inspected. Development is descriptive; the historical holdout is exploratory. Intervals are nominal game-cluster bootstrap intervals, without a multiple-testing correction.
+Reconstruct raw cached plays with prefix-only timestamps and score/clock quality; require both current raw scores to agree with repaired scores. Stable Q3/Q4 football leader at margin 3/6/7, positive regulation time, last prior raw price within 3c of the original frozen smooth DEV model and no older than 300s (an added causal reference-age assumption). First signal per game; no future has_price or entry-price filter. Buy strictly after 3s, before the next state or original 120s entry expiry, using one print and at most $100 actual capital. Original mandatory key-specific mechanism criterion: DEAD (failed); the non-key control and its uncertainty are reported alongside the primary leg.
 
-| Window | Signals | Funded | No fill | Capital incl. fees | Net P&L | ROI | 95% game CI |
-|---|---:|---:|---:|---:|---:|---:|---|
-| dev | 375 | 248 | 127 | $10783.99 | $-62.90 | -0.58% | -10.90% to +9.45% |
-| holdout | 58 | 40 | 18 | $1476.54 | $83.56 | +5.66% | -24.52% to +30.09% |
+The original frozen smooth model, 3/6/7 margins and leading-team direction remain unchanged. Both current raw team scores must agree with their prefix-repaired scores before eligibility; this prevents a raw 27–20 state from becoming a manufactured 27–21 six-point signal. The gate uses only the current row and its prefix, never final game quality.
 
-## Execution and coverage
+The original 120-second bound limits entry expiry after the signal (also censored at the next historical state). The separate 300-second maximum age of the prior price reference is an added causal signal assumption, not a replacement of that entry bound. Entry must occur strictly after 3 seconds. Historical play/transaction clocks do not reveal actual public receipt latency, order-book depth or real cancelability.
 
-Signals use only prior/observed raw settlement timestamps, without subtracting an estimated chain lag. Entries occur strictly after the 3s eligibility delay and before expiry. An ESPN historical play clock is an optimistic observation assumption; public receipt time is unavailable here. Prints are neither asks/bids nor available depth. Each source transaction has one shared capacity allocation per strategy replay. Fees are charged from historical market metadata; no fee is silently invented.
+The historical holdout has already been explored. Intervals resample whole games and are nominal, without correction for the inspected variants.
 
-Pair quantities and per-leg dollar budgets are fixed from signal-time references. Each leg fills independently, using only the first relevant later print and its remaining size. A missing/partial hedge remains in total P&L. After the hedge window expires, one later opposite-side print can provide a bounded sale-price proxy; any unsold residual settles. Matched-share and unmatched P&L are reported separately. No pair is labeled executable arbitrage. Event capital is capped at $100 inclusive of entry fees and is not recycled after an unwind.
+| Leg | Window | Signals | Funded | Capital incl. fees | Net P&L | ROI | 95% game CI |
+|---|---|---:|---:|---:|---:|---:|---|
+| Primary 3/6/7 | dev | 375 | 248 | $10783.99 | $-62.90 | -0.58% | -10.90% to +9.45% |
+| Primary 3/6/7 | holdout | 57 | 39 | $1474.53 | $83.34 | +5.65% | -24.85% to +30.47% |
+| Mandatory control 2/5/8/9 | dev | 182 | 111 | $5505.88 | $-311.99 | -5.67% | -20.42% to +8.79% |
+| Mandatory control 2/5/8/9 | holdout | 26 | 20 | $920.89 | $4.33 | +0.47% | -30.45% to +24.82% |
 
-The already collected moneyline and rung subsets have legacy eventual-volume and collection-budget biases. Removing volume eligibility does not backfill absent markets. No unseen market can be claimed tested. Metadata and historical tape timestamps do not prove when a market or signal first became publicly visible.
+## Mandatory control and provenance
 
-Paired positions use one ledger row per signal. Displayed prices are aggregate realized cash per total acquired share, not quotes. `exit_kind=exit_price` records that cash accounting; residual settlement determines the final exit clock. Per-leg quantities, sales and residuals remain in the saved parquet audit. All signals, including no-fills, are in the complete desk ledger. Legacy `results*.json`/`bets*.parquet` files predate this repair and are not accepted inputs to the exporters.
+Original mandatory control: if the non-key 2/5/8/9 control is also profitable, the key-specific mechanism verdict is DEAD regardless of the main leg.
+
+This prespecified point-estimate rule is not a significance test. Wide intervals can include loss; a positive control neither proves a reliable generic leading-team edge nor supports key-specific attribution. A nonpositive control alone cannot establish the primary mechanism.
+
+432 of 432 selected signals match both current raw scores and the raw margin. The score-agreement gate rejected 776 otherwise eligible state rows, including 157 repaired key-margin rows.
+
+| Absolute raw margin | DEV signals / funded | Holdout signals / funded |
+|---|---:|---:|
+| 3 | 165 / 120 | 22 / 16 |
+| 6 | 49 / 33 | 12 / 8 |
+| 7 | 161 / 95 | 23 / 15 |
+
+## Limits
+
+Buying leaders at margins 3 and 6 is not justified by the claimed plateau-step direction; 7 aligns but must be tested separately. Original directions remain visible, not selected away.
+
+One signal per game, at most $100 fee-inclusive capital, one strictly later size-bounded print, settlement exit. Every no-fill remains in the full ledger. The collected/matched universe retains historical selection and missing-market biases. Agreement proves consistency with the cached raw feed, not that the feed itself was correct. The frozen model is preserved for an honest test of the original rule; no retraining or choice among margins follows the holdout.
 
 ## Full audit results
 
@@ -39,17 +57,17 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
     "drop_top3_pnl_usd": -328.9001841074828
   },
   "holdout": {
-    "signals": 58,
-    "bets": 40,
+    "signals": 57,
+    "bets": 39,
     "no_fill": 18,
-    "cost_usd": 1476.5367923085182,
-    "pnl_usd": 83.55619678415431,
-    "roi": 0.05658930899616588,
-    "ci_lo": -0.24522628117756481,
-    "ci_hi": 0.3009415031435202,
-    "events": 40,
+    "cost_usd": 1474.5266932756665,
+    "pnl_usd": 83.34160275708493,
+    "roi": 0.05652091829680023,
+    "ci_lo": -0.24845568075685828,
+    "ci_hi": 0.3047345195451391,
+    "events": 39,
     "top3_pnl_usd": 196.50021544583564,
-    "drop_top3_pnl_usd": -112.94401866168128
+    "drop_top3_pnl_usd": -113.15861268875072
   },
   "frozen_coefficients": {
     "coef": [
@@ -81,17 +99,17 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
   },
   "legacy_game_quality_descriptive": {
     "False": {
-      "signals": 24,
-      "bets": 11,
+      "signals": 23,
+      "bets": 10,
       "no_fill": 13,
-      "cost_usd": 434.50481497834943,
-      "pnl_usd": 23.699844510914964,
-      "roi": 0.054544492244800256,
-      "ci_lo": -0.5828013613934315,
-      "ci_hi": 0.5395495673652007,
-      "events": 11,
+      "cost_usd": 432.4947159454976,
+      "pnl_usd": 23.485250483845544,
+      "roi": 0.05430182061878672,
+      "ci_lo": -0.5746966434091864,
+      "ci_hi": 0.5425884453325013,
+      "events": 10,
       "top3_pnl_usd": 107.87904314295467,
-      "drop_top3_pnl_usd": -84.17919863203971
+      "drop_top3_pnl_usd": -84.39379265910912
     },
     "True": {
       "signals": 409,
@@ -117,52 +135,52 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
   },
   "bootstrap_tail_mass_below_zero": {
     "dev": 0.55225,
-    "holdout": 0.339
+    "holdout": 0.33425
   },
   "tail_mass_note": "Ordinary bootstrap tail mass is not a calibrated null-test p-value.",
   "direction_caveat": "Buying leaders at margins 3 and 6 is not justified by the claimed plateau-step direction; 7 aligns but must be tested separately. Original directions remain visible, not selected away.",
   "variants": {
     "control_2589": {
       "dev": {
-        "signals": 185,
-        "bets": 113,
-        "no_fill": 72,
-        "cost_usd": 5705.884905679442,
-        "pnl_usd": -391.3645543581907,
-        "roi": -0.06858963347974997,
-        "ci_lo": -0.21253546692363412,
-        "ci_hi": 0.06997683996488584,
-        "events": 113,
+        "signals": 182,
+        "bets": 111,
+        "no_fill": 71,
+        "cost_usd": 5505.884905679442,
+        "pnl_usd": -311.99181667442275,
+        "roi": -0.05666515410676244,
+        "ci_lo": -0.20422123422087038,
+        "ci_hi": 0.08787547621418167,
+        "events": 111,
         "top3_pnl_usd": 288.6792554682204,
-        "drop_top3_pnl_usd": -680.043809826411
+        "drop_top3_pnl_usd": -600.6710721426432
       },
       "holdout": {
-        "signals": 28,
-        "bets": 21,
-        "no_fill": 7,
-        "cost_usd": 921.9232044994824,
-        "pnl_usd": 3.2961206989662983,
-        "roi": 0.0035752660122659367,
-        "ci_lo": -0.3119942077199081,
-        "ci_hi": 0.24423902910727946,
-        "events": 21,
+        "signals": 26,
+        "bets": 20,
+        "no_fill": 6,
+        "cost_usd": 920.8917055087493,
+        "pnl_usd": 4.327619689699404,
+        "roi": 0.0046993795945947815,
+        "ci_lo": -0.30447172199878936,
+        "ci_hi": 0.24815225032275023,
+        "events": 20,
         "top3_pnl_usd": 119.27575018043302,
-        "drop_top3_pnl_usd": -115.97962948146673
+        "drop_top3_pnl_usd": -114.9481304907336
       }
     },
     "neutral_other": {
       "dev": {
-        "signals": 694,
-        "bets": 344,
-        "no_fill": 350,
-        "cost_usd": 16351.569366474767,
-        "pnl_usd": -156.8504718304505,
-        "roi": -0.009592380297883658,
-        "ci_lo": -0.06773130384663256,
-        "ci_hi": 0.04322053333429311,
-        "events": 344,
+        "signals": 690,
+        "bets": 345,
+        "no_fill": 345,
+        "cost_usd": 16454.00216860327,
+        "pnl_usd": -159.3001125689633,
+        "roi": -0.009681541969948932,
+        "ci_lo": -0.0639895936634541,
+        "ci_hi": 0.04164491779349105,
+        "events": 345,
         "top3_pnl_usd": 194.8883529332748,
-        "drop_top3_pnl_usd": -351.738824763725
+        "drop_top3_pnl_usd": -354.18846550223816
       },
       "holdout": {
         "signals": 93,
@@ -221,17 +239,17 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
         "drop_top3_pnl_usd": -4184.310331181552
       },
       "holdout": {
-        "signals": 58,
-        "bets": 35,
+        "signals": 57,
+        "bets": 34,
         "no_fill": 23,
-        "cost_usd": 553.7235830274204,
-        "pnl_usd": -195.18350784450558,
-        "roi": -0.3524926765397313,
-        "ci_lo": -0.8598608256140234,
-        "ci_hi": 0.8096101898165166,
-        "events": 35,
+        "cost_usd": 553.49564400346,
+        "pnl_usd": -194.95556882054524,
+        "roi": -0.3522260218895715,
+        "ci_lo": -0.8673417707400081,
+        "ci_hi": 0.9072747268970005,
+        "events": 34,
         "top3_pnl_usd": 219.14483841160717,
-        "drop_top3_pnl_usd": -414.32834625611275
+        "drop_top3_pnl_usd": -414.10040723215246
       }
     },
     "band2c": {
@@ -249,45 +267,107 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
         "drop_top3_pnl_usd": 50.20991654703812
       },
       "holdout": {
-        "signals": 53,
-        "bets": 42,
+        "signals": 52,
+        "bets": 41,
         "no_fill": 11,
-        "cost_usd": 1527.9115641366081,
-        "pnl_usd": 31.71298816145326,
-        "roi": 0.0207557746834475,
-        "ci_lo": -0.2660041297718676,
-        "ci_hi": 0.27148348355874335,
-        "events": 42,
+        "cost_usd": 1525.9014651037562,
+        "pnl_usd": 31.49839413438384,
+        "roi": 0.020642482397932628,
+        "ci_lo": -0.2793109009673072,
+        "ci_hi": 0.27113974992876305,
+        "events": 41,
         "top3_pnl_usd": 196.50021544583564,
-        "drop_top3_pnl_usd": -164.78722728438237
+        "drop_top3_pnl_usd": -165.0018213114518
       }
     },
     "band5c": {
       "dev": {
-        "signals": 411,
-        "bets": 262,
-        "no_fill": 149,
-        "cost_usd": 11078.062154314977,
-        "pnl_usd": 856.0139502215703,
-        "roi": 0.07727109112563946,
-        "ci_lo": -0.025561017156902097,
-        "ci_hi": 0.17168707839265945,
-        "events": 262,
+        "signals": 409,
+        "bets": 261,
+        "no_fill": 148,
+        "cost_usd": 11077.062155341093,
+        "pnl_usd": 855.4754891792029,
+        "roi": 0.07722945643730213,
+        "ci_lo": -0.022679755228262273,
+        "ci_hi": 0.17176613451367154,
+        "events": 261,
         "top3_pnl_usd": 293.02461189140286,
-        "drop_top3_pnl_usd": 562.9893383301674
+        "drop_top3_pnl_usd": 562.4508772878003
       },
       "holdout": {
-        "signals": 62,
-        "bets": 46,
+        "signals": 61,
+        "bets": 45,
         "no_fill": 16,
-        "cost_usd": 1959.3674112289273,
-        "pnl_usd": 175.18031361771128,
-        "roi": 0.08940656694286706,
-        "ci_lo": -0.19482342780014691,
-        "ci_hi": 0.34252274834065294,
-        "events": 46,
+        "cost_usd": 1957.3573121960758,
+        "pnl_usd": 174.96571959064184,
+        "roi": 0.0893887480331005,
+        "ci_lo": -0.1931396398123619,
+        "ci_hi": 0.34540976769899534,
+        "events": 45,
         "top3_pnl_usd": 218.3224275919623,
-        "drop_top3_pnl_usd": -43.14211397425099
+        "drop_top3_pnl_usd": -43.356708001320456
+      }
+    }
+  },
+  "mandatory_control_criterion": {
+    "criterion": "Original mandatory control: if the non-key 2/5/8/9 control is also profitable, the key-specific mechanism verdict is DEAD regardless of the main leg.",
+    "status": "failed",
+    "mechanism_verdict": "DEAD",
+    "control_positive_point_estimate": true,
+    "control_holdout": {
+      "signals": 26,
+      "bets": 20,
+      "no_fill": 6,
+      "cost_usd": 920.8917055087493,
+      "pnl_usd": 4.327619689699404,
+      "roi": 0.0046993795945947815,
+      "ci_lo": -0.30447172199878936,
+      "ci_hi": 0.24815225032275023,
+      "events": 20,
+      "top3_pnl_usd": 119.27575018043302,
+      "drop_top3_pnl_usd": -114.9481304907336
+    },
+    "uncertainty": "This prespecified point-estimate rule is not a significance test. Wide intervals can include loss; a positive control neither proves a reliable generic leading-team edge nor supports key-specific attribution. A nonpositive control alone cannot establish the primary mechanism."
+  },
+  "raw_margin_provenance": {
+    "candidate_states_before_current_score_gate": 69242,
+    "rejected_current_score_disagreement": 776,
+    "rejected_repaired_key_margin_states": 157,
+    "eligible_states_after_current_score_gate": 68466,
+    "gate": "Both current raw scores must equal their prefix-repaired values. No future rows or final game-quality flags select eligibility.",
+    "selected_signals": 432,
+    "selected_raw_score_and_margin_agree": 432,
+    "selected_disagreement_rows": [],
+    "by_absolute_raw_margin": {
+      "3": {
+        "dev": {
+          "signals": 165,
+          "funded": 120
+        },
+        "holdout": {
+          "signals": 22,
+          "funded": 16
+        }
+      },
+      "6": {
+        "dev": {
+          "signals": 49,
+          "funded": 33
+        },
+        "holdout": {
+          "signals": 12,
+          "funded": 8
+        }
+      },
+      "7": {
+        "dev": {
+          "signals": 161,
+          "funded": 95
+        },
+        "holdout": {
+          "signals": 23,
+          "funded": 15
+        }
       }
     }
   },
@@ -306,17 +386,17 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
       "drop_top3_pnl_usd": -463.1238719614403
     },
     "holdout": {
-      "signals": 58,
-      "bets": 40,
+      "signals": 57,
+      "bets": 39,
       "no_fill": 18,
-      "cost_usd": 1482.7226837404783,
-      "pnl_usd": 62.60417353314374,
-      "roi": 0.0422224426857837,
-      "ci_lo": -0.25363399615088966,
-      "ci_hi": 0.2824652562221399,
-      "events": 40,
+      "cost_usd": 1480.6912365530125,
+      "pnl_usd": 62.41092766068831,
+      "roi": 0.04214985955206865,
+      "ci_lo": -0.257851968823904,
+      "ci_hi": 0.2858079571319177,
+      "events": 39,
       "top3_pnl_usd": 188.4801709356928,
-      "drop_top3_pnl_usd": -125.87599740254903
+      "drop_top3_pnl_usd": -126.0692432750045
     }
   },
   "actual_margin_partition": {
@@ -363,17 +443,17 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
         "drop_top3_pnl_usd": -215.0334764255623
       },
       "holdout": {
-        "signals": 13,
-        "bets": 9,
+        "signals": 12,
+        "bets": 8,
         "no_fill": 4,
-        "cost_usd": 467.52042239478476,
-        "pnl_usd": -158.33024087157872,
-        "roi": -0.3386595179319911,
-        "ci_lo": -0.8573228435407994,
-        "ci_hi": 0.18935187143632468,
-        "events": 9,
+        "cost_usd": 465.51032336193293,
+        "pnl_usd": -158.5448348986481,
+        "roi": -0.34058285486266215,
+        "ci_lo": -0.8334045574579779,
+        "ci_hi": 0.1861288649755287,
+        "events": 8,
         "top3_pnl_usd": 43.129489724995906,
-        "drop_top3_pnl_usd": -201.45973059657462
+        "drop_top3_pnl_usd": -201.67432462364403
       }
     },
     "7": {
@@ -406,14 +486,14 @@ Paired positions use one ledger row per signal. Displayed prices are aggregate r
     }
   },
   "coverage": {
-    "state_rows": 69242,
-    "state_games": 1030,
+    "state_rows": 68466,
+    "state_games": 1028,
     "legacy_subset": "eventual-volume-selected compact moneyline collection; not a causal full universe",
     "expiry": "next-state retrospective censoring, not proof a pending sports order can be canceled",
     "raw_prefix": "Raw cached plays and matched-game mapping, not the future-filtered NFL panel. Prefix-only score/clock anomaly counts; plausible nondecreasing timestamp rule can reject later states after an outlier. No final quality flag or final game length controls signals. The legacy matched/collected universe still excludes uncollected and unmatched games."
   },
   "execution_version": "football-causal-pairs-v2",
   "holdout_status": "previously explored; not confirmatory",
-  "description": "Reconstruct raw cached plays with prefix-only timestamps and score/clock quality. Stable Q3/Q4 football leader at margin 3/6/7, positive regulation time, last prior raw price within 3c of the original frozen smooth DEV model and no older than 300s. First signal per game; no future has_price or entry-price filter. Buy strictly after 3s, before next state/120s, using one print and at most $100 actual capital."
+  "description": "Reconstruct raw cached plays with prefix-only timestamps and score/clock quality; require both current raw scores to agree with repaired scores. Stable Q3/Q4 football leader at margin 3/6/7, positive regulation time, last prior raw price within 3c of the original frozen smooth DEV model and no older than 300s (an added causal reference-age assumption). First signal per game; no future has_price or entry-price filter. Buy strictly after 3s, before the next state or original 120s entry expiry, using one print and at most $100 actual capital. Original mandatory key-specific mechanism criterion: DEAD (failed); the non-key control and its uncertainty are reported alongside the primary leg."
 }
 ```
