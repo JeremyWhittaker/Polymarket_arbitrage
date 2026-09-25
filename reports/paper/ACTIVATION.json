@@ -1,0 +1,384 @@
+{
+ "activated_ms": 1790318729161,
+ "activated_utc": "2026-09-25T06:45:29.161918+00:00",
+ "code_files": {
+  "pmsports/book_replay.py": "f2655d7ceb74c0d9e5ad6a44f81d1ccec463aad275ab5cff07ce12e5599a5259",
+  "pmsports/paper/__init__.py": "8c1cf6e140622ab4771eca914051e2cf23528208c18afaa112be1fdbbebbede8",
+  "pmsports/paper/engine.py": "9e20c77bc563abb1dff5bcefa8f9e26ab31a90f4c5817fb7e8d2796ba671ea48",
+  "pmsports/paper/mlb.py": "a216c84d6d7223f591a09eca5029f8441c9b02fd8a523a76ddaea503b2bf4328",
+  "pmsports/paper/mlb_model.py": "1add0bdc2b8e319a466748de2030f42e7719d8ac6c832f7150b9a26851fbf33e",
+  "pmsports/paper/soccer.py": "6ed170af2241c7b33d7e62d43e5796ee7c0a677da44afdec8d2859819b56e156",
+  "pmsports/paper/spec.py": "66f74dcbb40233febfa7e7c976b8ad694d421979681ef6aacb0f65720ecafa3e",
+  "pmsports/research/h_soccer_continuation.py": "014498730ebc8136dd6766926f2b2a9393cbc41e6db0a08fcef91008eab9a05a"
+ },
+ "code_sha256": "00932f4fa5ac41cbb69b12cd554494cc41794402e5aa9c9054e6712cb956da6e",
+ "git_commit": "1a25ce33e5e3577714e1a283df6f3bac71feedda",
+ "git_dirty": [],
+ "model_snapshots": {
+  "2025": "42fcda2edee0f57ad44a83801708fbc761d8a633c6f3628f74f01e05a0fa5259"
+ },
+ "protocols": {
+  "pmsports/paper/DESIGN.md": "24dd2a334d9576c0338af2a5f63f73ae26690e465b6f61d26e9e97c9957dd827",
+  "reports/PROSPECTIVE_PROTOCOL.md": "b57e47101aad57c73fac2b4c517ae30d314924e9b9271398272f601b1ce3903c",
+  "reports/PROSPECTIVE_SOCCER_PROTOCOL.md": "5aaf2dfe61912509616b6b994f19d6cf76a1078c3040d6091e39269bf5963ae0"
+ },
+ "rules": {
+  "mlb_03c": "2f54b92fa830a6528273e669182a98d5b14716340bb240c288ed1a23f370ff1f",
+  "mlb_10c": "dca509eacee4b5858847d3476f2932a2027bcd171453151a8fec61d811a476a6",
+  "mlb_10c_delay2": "be99d05104f0c6c72c0e6e9d605f1884361fe27216c52a0b60bfabdc1a03321a",
+  "mlb_10c_plus1c": "d8b0441d49f44f6acbfc93238e7d5d5ce670a8eacccb0b34a59db6a079b56c6c",
+  "soccer_added_time": "b3ee90de710a6027d9504bdd1f09069377276aee61c2e78495122c60c623ef3b",
+  "soccer_added_time_plus1c": "5836f34610182f2f909131cdc1493fc8adcdf8711e2f3d7b494264ede34b2691",
+  "soccer_ctrl_70_80": "fe6516cf76d85e30cb4752d615dea5856343d67649161b27be2cbb31273997fd",
+  "soccer_ctrl_75_85": "fc098b18fdce31e2db92ce79a5201f2b98f257322797c75428d750440ce408f7",
+  "soccer_delay10": "68e21ec40c1ed9e894e9de45930064dc28c466764e5acb19f23f3dd476e8a582",
+  "soccer_delay2": "b102d867fb07c5acaf2cf12cabed08da0f35eea0e033435b2f91edbd2a6e2de1",
+  "soccer_delay60": "6ec767558d80b75adf6bfb7a41dc5bd3d052591d952ebc7363f81fce8790e767"
+ },
+ "rules_json": {
+  "mlb_03c": {
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "policy": "mlb_03c",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "control",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "threshold": 0.03,
+   "us_fee_coefficient": 0.0695,
+   "version": "v1"
+  },
+  "mlb_10c": {
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "policy": "mlb_10c",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "primary",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "threshold": 0.1,
+   "us_fee_coefficient": 0.0695,
+   "version": "v1"
+  },
+  "mlb_10c_delay2": {
+   "base": "mlb_10c",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 2,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "policy": "mlb_10c_delay2",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "threshold": 0.1,
+   "us_fee_coefficient": 0.0695,
+   "version": "v1"
+  },
+  "mlb_10c_plus1c": {
+   "base": "mlb_10c",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "policy": "mlb_10c_plus1c",
+   "price_adj": 0.01,
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "report_only": true,
+   "role": "sensitivity",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1"
+  },
+  "soccer_added_time": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "policy": "soccer_added_time",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "primary",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1",
+   "window": [
+    90,
+    null
+   ]
+  },
+  "soccer_added_time_plus1c": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "policy": "soccer_added_time_plus1c",
+   "price_adj": 0.01,
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "report_only": true,
+   "role": "sensitivity",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1"
+  },
+  "soccer_ctrl_70_80": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "policy": "soccer_ctrl_70_80",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "control",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1",
+   "window": [
+    70,
+    80
+   ]
+  },
+  "soccer_ctrl_75_85": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "policy": "soccer_ctrl_75_85",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "control",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1",
+   "window": [
+    75,
+    85
+   ]
+  },
+  "soccer_delay10": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 10,
+   "policy": "soccer_delay10",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1",
+   "window": [
+    90,
+    null
+   ]
+  },
+  "soccer_delay2": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 2,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "policy": "soccer_delay2",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1",
+   "window": [
+    90,
+    null
+   ]
+  },
+  "soccer_delay60": {
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "first_signal_per_game": true,
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 60,
+   "policy": "soccer_delay60",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "us_fee_coefficient": 0.0695,
+   "version": "v1",
+   "window": [
+    90,
+    null
+   ]
+  }
+ },
+ "spec_sha256": "a8fef17dca77f4a44b899c076450bf7b94ce25ada73b0e2ae33266069af8039f",
+ "support_files": {
+  "pmsports/paper/capture_soccer.py": "ae84be062f0c20f0960ef4ed6216d4145761c389bf49e0de6d81effc21f74063",
+  "pmsports/paper/report.py": "887fcc2f71139baaa5933854fc9eeb91e70700b5d72fe4802d28095f469da8e6",
+  "pmsports/paper/rotate.py": "ed629a350ab18abcde915f3ba6b8cf6582cc7ba1e52fa289c059ee1b8da09ce6",
+  "pmsports/paper/run.py": "4b57bc3750a96fa97fb2bde6fe06045b3c36c64b86cd4c8f0adc540c062851bd",
+  "pmsports/paper/settle.py": "70b3cc86c7d82eee51513e4ab48e6535ee19066c54c649c2e004ff29601db983",
+  "pmsports/record.py": "be0c5ffe310c3f7574cfe3fb8a08497a27eb88ab640d87ae540de5c1f0598488"
+ },
+ "taker_fee_sha256": "9a8883ae036f864c333e499175d433304ba228f651adb264034cb57fdea332ef",
+ "version": "v1"
+}
