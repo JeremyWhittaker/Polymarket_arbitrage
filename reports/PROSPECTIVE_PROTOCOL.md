@@ -33,3 +33,17 @@ A result qualifies for further investigation only if the primary's net cash and 
 ## Current blockers to a prospective claim
 
 The project has only one recovered day of received-book evidence and no completed future run under this specification. Historical taker prints do not reveal the follower's order admission, queue priority or available future depth. These missing observations cannot be fixed by rerunning the old corpus. The repaired capture and research components can support the test, but an end-to-end prospective runner with this exact policy has not been deployed by this repair.
+
+## Activation addendum — 2026-09-25 UTC
+
+This addendum records venue facts and implementation choices before activation. It changes no rule above.
+
+- **Venue delay.** "Actually applicable venue delay" is read per market from the CLOB market field `seconds_delay` at signal time. A live MLB moneyline reported 0 seconds on 2026-09-25. The +2-second sensitivity covers our own submission latency.
+- **Fees.** The primary uses each market's Gamma fee schedule at signal time. It was 0.05 × shares × p × (1 − p) for sports on 2026-09-25, up from 0 in 2025 and 0.03 in early 2026. Re-pricing the historical 10¢ fills at 0.05 lowers +7.32% to +5.99%, with an interval from −0.43% to +12.20%. The same fills are also re-priced at the Polymarket US coefficient 0.0695, a separate exchange whose book this capture does not observe.
+- **Signal state.** States come from the MLB Stats API linescore, polled every 2 seconds. A half-inning-start state is the first received linescore showing three outs, or a new inning or half if the three-out state fell between polls. It is labelled as the next half-inning with 0 outs and empty bases, plus a runner on second in regular-season extra innings, matching the historical checkpoint construction. The leader and lead come from the runs in that same response.
+- **Leader transaction.** A CLOB `last_trade_price` message for the leader's own token.
+- **Book freshness.** The book must have a snapshot since the last connection open, and the connection must be confirmed current within 5 seconds by any message or heartbeat reply.
+- **Model snapshot.** Games in 2026 use seasons 2025 and earlier. The 2027 snapshot (seasons 2026 and earlier) must be generated and logged before the first 2027 game.
+- **Timeline.** About 90 regular-season and postseason games remain in 2026. The 500-game endpoint will mostly accrue during the 2027 season. The endpoint is unchanged.
+
+The companion soccer test is specified in [PROSPECTIVE_SOCCER_PROTOCOL.md](PROSPECTIVE_SOCCER_PROTOCOL.md).
