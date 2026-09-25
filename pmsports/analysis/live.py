@@ -12,6 +12,7 @@ free feed) is the whole timing hypothesis.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import logging
 
 import numpy as np
@@ -25,8 +26,11 @@ log = logging.getLogger("pmsports")
 
 
 def _jsonl(path):
-    with open(path) as fh:
-        return [json.loads(line) for line in fh]
+    """Rows of a capture stream, from the plain or rotated .gz file; connection markers skipped."""
+    from ..paper.rotate import open_capture
+    path = Path(path)
+    with open_capture(path.parent, path.name.removesuffix(".jsonl")) as fh:
+        return [r for r in map(json.loads, fh) if "conn" not in r]
 
 
 def load_metadata(day: str) -> pd.DataFrame:
@@ -36,7 +40,7 @@ def load_metadata(day: str) -> pd.DataFrame:
     for i in reversed(range(3)):
         d_str = (dt - pd.Timedelta(days=i)).strftime("%Y-%m-%d")
         p = DATA_DIR / "live" / d_str / "games.jsonl"
-        if p.exists():
+        if p.exists() or p.with_name(p.name + ".gz").exists():
             for r in _jsonl(p):
                 if "game" in r:
                     games.append(r["game"])

@@ -14,11 +14,13 @@
   favorites    bet every pregame favorite, hold to the end (all sports) -> reports/FAVORITES.md
   thresholds   pregame price thresholds by sport + MLB "leader below historical win rate" rule
   calibration  price vs realized win rate by sport ("the breaking point") -> reports/CALIBRATION.md
+  paper        forward paper test (no orders): run [--follow] | settle | report | snapshot | activate
 """
 from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 
 
 def main() -> None:
@@ -56,6 +58,18 @@ def main() -> None:
     sub.add_parser("thresholds")
     cl = sub.add_parser("calibration")
     cl.add_argument("--points", action="store_true", help="1-cent resolution sweep from 50c up")
+    pp = sub.add_parser("paper", help="forward paper-trading engine; never places orders")
+    pp.add_argument("action", choices=["run", "settle", "report", "snapshot", "activate"])
+    pp.add_argument("--follow", action="store_true", help="tail the live capture (2 s lag)")
+    pp.add_argument("--since", help="replay start (ISO, UTC); default checkpoint - 36 h")
+    pp.add_argument("--until", help="replay end (ISO, UTC, exclusive)")
+    pp.add_argument("--max-season", type=int, default=2025)
+    pp.add_argument("--force", action="store_true")
+    pp.add_argument("--live", default=str(Path(__file__).resolve().parent.parent / "data" / "live"))
+    pp.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "data" / "paper"))
+    pp.add_argument("--report", help="markdown path (default reports/PAPER_TEST.md)")
+    pp.add_argument("--ledgers", help="ledger dir (default data/research/ledgers)")
+    pp.add_argument("--model-dir", help="MLB model snapshot dir (default data/paper)")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -111,6 +125,9 @@ def main() -> None:
     elif a.cmd == "calibration":
         from .analysis import calibration
         calibration.run_points() if a.points else calibration.run()
+    elif a.cmd == "paper":
+        from .paper.run import main as paper_main
+        paper_main(a)
 
 
 if __name__ == "__main__":

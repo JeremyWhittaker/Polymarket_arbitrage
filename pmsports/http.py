@@ -18,7 +18,7 @@ HOST_RPS = {
     "gamma-api.polymarket.com": 8.0,
     "clob.polymarket.com": 10.0,
     "data-api.polymarket.com": 15.0,
-    "statsapi.mlb.com": 8.0,
+    "statsapi.mlb.com": 12.0,   # 2-second linescore polling of a full live slate
 }
 DEFAULT_RPS = 5.0
 
