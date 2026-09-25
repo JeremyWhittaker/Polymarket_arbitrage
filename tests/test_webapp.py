@@ -244,6 +244,66 @@ def test_ui_delayed_filters_do_not_overwrite_table_or_chart(isolated_ledgers):
         assert not thread.is_alive()
 
 
+def subcent_ledger(slug="subcent"):
+    """A single funded order with a sub-cent stake, like the 39k tiny copy-orders in prod."""
+    row = [1, "dev", "2026-09-01", "mlb", "mlb", "event-1", "market-1", "YES",
+           101, 0.001, 0.00002, 0.0, "resolution", 201, 0.0,
+           0.0, -0.00002, -1.0, "signal-1"]
+    return {"slug": slug, "title": "Subcent strategy", "n_total_trades": 1,
+            "hypothesis": "Research example", "verdict": "INCONCLUSIVE",
+            "columns": COLUMNS, "rows": [row]}
+
+
+@pytest.mark.skipif(os.environ.get("PMSPORTS_BROWSER_QA") != "1", reason="opt-in browser gate; install Playwright and a Chromium browser")
+def test_ui_subcent_stakes_do_not_round_to_misleading_zero(isolated_ledgers):
+    """A $0.00002 funded order must not render as "$0 = 0.0 shares" / "−$0"."""
+    playwright = pytest.importorskip("playwright.async_api")
+    import uvicorn
+
+    put(isolated_ledgers, subcent_ledger())
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    instance = uvicorn.Server(uvicorn.Config(server.app, log_level="critical"))
+    thread = threading.Thread(target=instance.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+
+    async def check():
+        async with playwright.async_playwright() as pw:
+            kwargs = {"executable_path": os.environ["PMSPORTS_CHROMIUM"]} if os.environ.get("PMSPORTS_CHROMIUM") else {}
+            browser = await pw.chromium.launch(**kwargs)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            try:
+                await page.goto(f"http://127.0.0.1:{port}/")
+                await page.wait_for_selector("#tb tr[data-id='1']")
+                row_text = await page.locator("tr.t[data-id='1']").inner_text()
+                assert "−$0.00002" in row_text
+                assert "−$0 " not in row_text
+                await page.click("tr.t[data-id='1']")
+                await page.wait_for_selector("tr.detail")
+                detail_text = await page.locator("tr.detail").inner_text()
+                assert "$0.00002" in detail_text
+                assert "0.020 shares" in detail_text
+                assert "$0 = 0.0 shares" not in detail_text
+                assert not errors
+            finally:
+                await browser.close()
+
+    try:
+        deadline = time.monotonic() + 5
+        while not instance.started and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert instance.started
+        asyncio.run(check())
+    finally:
+        instance.should_exit = True
+        thread.join(timeout=5)
+        sock.close()
+        assert not thread.is_alive()
+
+
 def test_no_fill_audits_do_not_count_as_bets_and_arbitrary_periods_work():
     import pandas as pd
     frame = pd.DataFrame(dict(period=['historical_capture']*3, stake_usd=[10.,0.,0.],

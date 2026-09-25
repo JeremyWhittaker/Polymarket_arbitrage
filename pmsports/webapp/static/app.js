@@ -6,7 +6,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var api = function (p) { return fetch(p).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); };
   var pct = function (v, d) { return (v == null || isNaN(v)) ? "–" : (v >= 0 ? "+" : "") + (v * 100).toFixed(d == null ? 1 : d) + "%"; };
-  var usd = function (v) { return (v == null || isNaN(v)) ? "–" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+  var usd = function (v) { if (v == null || isNaN(v)) return "–"; var a = Math.abs(v); if (a < 5e-7) return "$0"; return (v < 0 ? "−$" : "$") + (a < 0.01 ? a.toLocaleString(undefined, { maximumSignificantDigits: 2 }) : a.toLocaleString(undefined, { maximumFractionDigits: 2 })); };
   var cents = function (v) { return (v == null || isNaN(v)) ? "–" : (v * 100).toFixed(1) + "¢"; };
   var sgn = function (v) { return v > 1e-7 ? "pos" : v < -1e-7 ? "neg" : "zero"; };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
@@ -207,7 +207,8 @@
         '<td class="r num">' + usd(r[c.payout]) + '</td><td class="r num ' + sgn(r[c.pnl_usd]) + '">' + usd(r[c.pnl_usd]) + "</td>" +
         '<td class="r num ' + sgn(r[c.roi_deployed]) + '">' + pct(r[c.roi_deployed]) + "</td></tr>";
       if (!open) return row;
-      var shares = r[c.entry_price] ? (r[c.stake_usd] / r[c.entry_price]).toFixed(1) : "–";
+      var sh = r[c.entry_price] ? (r[c.stake_usd] / r[c.entry_price]) : null;
+      var shares = sh == null ? "–" : (sh > 0 && sh < 0.1 ? sh.toPrecision(2) : sh.toFixed(1));
       var codes = ['market_code', 'event_code', 'side_code'].filter(function (key) { return c[key] != null && r[c[key]] != null; }).map(function (key) {
         return key.replace('_code', '') + ' ' + esc(r[c[key]]);
       }).join(' · ');
