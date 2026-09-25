@@ -113,4 +113,17 @@ def clean(x):
 print(json.dumps(clean(out), indent=2, allow_nan=False))
 ```
 
+## Additional concentration and hedge checks
+
+These figures were recomputed from the accepted `data/research/soccer_continuation/trades.parquet` (primary variant, July-onward evaluation). They group funded legs by game and remove the games with the largest net P&L. They add no new rule or interval.
+
+| Rule / cost case | Funded games | Capital | Net P&L | Cash ROI | After removing best three games |
+|---|---:|---:|---:|---:|---|
+| Early red-card opponent, fee only | 61 | $2,519.92 | +$528.11 | +20.96% | +$103.62 on $2,219.92 (+4.67%) |
+| Early red-card opponent, +1¢ | 61 | $2,530.51 | +$477.85 | +18.88% | +$70.88 on $2,230.51 (+3.18%) |
+| Early substitution opponent, fee only | 47 | $1,474.53 | +$396.47 | +26.89% | −$244.21 on $1,272.33 (−19.19%) |
+| Draw-anchor team pair, fee only | 52 | $391.15 | +$18.52 | +4.73% | −$23.04 on $329.94 (−6.98%) |
+
+Every draw-anchor signal is a two-leg pair. Of the 52 funded evaluation signals, 47 have a failed or partial hedge and only 5 have both legs completely filled.
+
 Independent operational evidence: `soccer-direct-acceptance.json`, `soccer-supplement-parent.json`, and `soccer-final-review.md/json` under `.foreman/repair-20260922/`. Full JSON/Parquet data remain local under ignored `data/`. No real-money orders were placed.

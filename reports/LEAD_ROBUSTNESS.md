@@ -44,6 +44,8 @@ After best 3 removal the 10c interval crosses zero; both top 1%-removed interval
 
 The 10c rule is positive in all four year×direction cash splits: 2025 away +10.39%, 2025 home +3.11%, 2026 away +8.73%, 2026 home +4.98%. Every corresponding CI crosses zero. Its 2026 home equal-game ROI is −3.27%. All monthly and combined splits, without selection, are retained in the JSON. Adjusted 8c has only 2026 trading results; 2025 is its model-fit period and must not be presented as a second trading replication.
 
+For comparison, the original 3c first/game rule (2,824 funded games, $94,351.83 capital, +$399.65, +0.42%) splits into 2025: 1,220 games, $51,901.44, +$444.76, +0.86%; and 2026: 1,604 games, $42,450.40, −$45.11, −0.11%. These cash splits are recomputed from the canonical `mlb_inning_discount_03c_first` ledger by calendar year of the game date; no interval is claimed for them.
+
 ## Capacity and clock limits
 
 | Rule | Median / mean funded allocation | No-fills | Full 100-dollar fills | Funded below 5 dollars | Effective capital-weighted games |

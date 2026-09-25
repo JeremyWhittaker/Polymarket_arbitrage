@@ -105,3 +105,38 @@ An independent frozen `05d59c8` comparison covers selection, large-trade copying
 A separate output-heavy stress has 220,000 signals, including 95,000 in one indivisible event, and both sizing policies across three delays/three phases. All 18 summary dictionaries match the frozen original exactly. Peak RSS falls from 995.45 MiB to 389.10 MiB (38.93 s versus 40.05 s). The full actual source has at most 94,978 raw prints in an event. These checks support bounded output memory but do not certify the full report. An adverse category-remapping/missing-event case independently exposed and fixed a component-identity mismatch before shipment; the corrected shared-cap allocation agrees with the monolithic replay.
 
 Final source validation: **207 tests passed in 27.85 seconds**, two third-party deprecation warnings, no skips; browser gate enabled. Evidence under `.foreman/repair-20260922/`: `wallet-r4-failure.json`, `wallet-r5-reference/`, `verify-wallet-r5.py`, `wallet-r5-stress.py`, stress result JSONs, source-freeze hashes and `final-tests-wallet-r5.log`. Full unsampled report, fresh-process canonical wallet ledger and final deployed-desk acceptance remain required.
+
+
+## Full unsampled wallet report and ledger accepted — 2026-09-25
+
+The fifth full report attempt finished at 04:38 UTC on September 23: exit code 0, READY marker, 3,868.79 seconds, 9.44 GiB peak under the 16 GiB service limit. Codex, the previous driver, had exhausted its quota and never consumed the notification. Claude resumed the goal and independently checked the staged output before accepting it. The run ID 991ad924682a, the input-manifest hash, the full expected manifest and the cached manifest all match the pre-launch admission. The `ALL` family contains exactly 53,771,657 valid fills. All 60 walk-forward rows reconcile to the new monthly cash audit. All six frozen source and test hashes, and `main` at `f7dd510`, were unchanged.
+
+The canonical ledger then ran as a fresh, separate process under the same 16 GiB, no-swap limit. It took 284.89 seconds, peaked at 7.63 GiB and exited 0 with a READY marker. `accept-wallet-final.py` passed every check. These include both READY markers with no FAIL, the expected run ID and full manifest, and valid-fill counts. They also include:
+
+- cash identities (stake plus fee equals cost; payout minus cost equals P&L);
+- entry strictly after the eligible time and before expiry;
+- null execution and exit clocks for every no-fill;
+- the $100 per-event cap;
+- no truncation;
+- agreement between the ledger, the report decomposition and the 30-second proportional FDR rule.
+
+The previous 101,150-row flat-$100 ledger from September 20 has been replaced. It is not used.
+
+Independent inspection of the 90,878-row ledger found 84,985 filled, 4,056 partial, 1,415 unfilled, 420 event-capped and 2 ineligible signals. The earliest entry comes 31 seconds after its signal. The 89,041 funded orders allocate $57,564.19 and lose $489.50 (−0.85%). The report's decomposition bootstrap gives a nominal interval of −2.9% to +1.3%; the ledger's own headline bootstrap, run separately, gives −3.00% to +1.27%. Removing the best three events gives −1.37%, and removing the best ten gives −2.11%. Equal-event ROI across 7,845 events is −4.02%. Median allocation is $0.026 because the leaders' median fill is $2.60. Faster-copy variants and monthly reselection are reported in [WALLETS.md](WALLETS.md); none has an interval above zero at the full-selection level.
+
+Evidence under `.foreman/repair-20260922/`: `wallet-ledger-r5-admission.json`, `wallet-r5-report-wake-retired.json` and `wallet-final-acceptance.json`, plus the report and ledger run directories recorded there. No source changed, so the 207-test checkpoint remains current.
+
+
+## Final synthesis, desk fix and deployment — 2026-09-25
+
+The desk was restarted on the final source (user service `pmsports-web.service`). `deployed-final-qa.py` passes against `http://127.0.0.1:8808` and the Tailscale address. It checks 128 studies with no index errors, health, `X-Robots-Tag: noindex`, robots disallow and no canonical link. It also reconciles API totals, last page, evaluation filter and equity for the wallet, five soccer and underdog ledgers, plus desktop 1440 and mobile 390 screenshots without page overflow. The wallet ledger serves 90,878 rows with evaluation P&L −$489.50.
+
+Reviewing those screenshots found a real display defect. The desk rounded dollars to two decimals and shares to one, so funded sub-cent copy orders appeared as "$0 = 0.0 shares" with P&L "−$0". This affected 39,389 of the 89,041 funded wallet orders. Commit 3c3b62b shows sub-cent values with two significant digits and renders float noise below 5e−7 as $0. A new opt-in browser test failed on the old formatter and passes now. The full suite passes **208 tests** (34.83 seconds, browser gate enabled, two third-party warnings, no skips). After the restart, the redeployed desk shows "$0.00002 = 0.020 shares".
+
+Seven independent sonnet analysts traced 201 numeric claims in the VIABILITY and SPORTS drafts to their source reports. Adversarial checkers confirmed seven discrepancies:
+- one mislabeled clock basis ("play" instead of "contact");
+- one wallet interval taken from the ledger's separate headline bootstrap rather than the published report;
+- five figures sourced only from private review notes.
+
+Each figure was recomputed from the canonical ledgers or the accepted soccer trade output, and each matched: 3¢ inning rule 2026 −0.11%; substitution best-three −$244.21; red card +1¢ best-three +$70.88 on $2,230.51; draw anchor 47 of 52 funded pairs with failed or partial hedges. They are now published in LEAD_ROBUSTNESS.md and SOCCER_ROBUSTNESS.md and cited from the drafts. A completeness critic found every peer-review finding and original prompt item implemented, or explicitly blocked or deferred with a reason. Its three stale-status notes were corrected.
+

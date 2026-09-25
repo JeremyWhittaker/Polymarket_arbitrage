@@ -6,14 +6,25 @@ The recovered [baseball](reports/research/BASEBALL_CONTINUATION.md),
 [football](reports/research/fb-key-number-wp-step.md) and
 [received-book](reports/research/LIVE_EXECUTION.md) studies now use corrected cash and timing.
 
-**No executable trading edge has been established.** Repairs and reruns are in progress.
+**No executable trading edge has been established.** The repairs and corrected reruns are
+complete. The [viability assessment](reports/VIABILITY.md) gives the bottom line and ranks
+every corrected result. The [sports map](reports/SPORTS.md) covers the twelve selected
+football, soccer and baseball hypotheses. The two strongest leads, a 10¢ MLB inning-state
+discount and a soccer added-time leader rule, are exploratory. They rest on optimistic
+historical execution, and neither is verified as tradable.
 The [independent review](reports/PEER_REVIEW.md) maps Jeremy's original prompts to the
 implementation. The [repair checklist](reports/REPAIR_CHECKLIST.md) and
 [validation evidence](reports/REPAIR_VALIDATION.md) track what has actually been verified.
-Earlier strategy reports and desk returns remain exploratory until their corrected rerun
-is identified there. July–September 2026 has already been inspected and is not a fresh
+Older strategy reports and desk studies without a corrected rerun listed there, such as
+[THORP.md](reports/THORP.md), remain archived exploratory work. July–September 2026 has already been inspected and is not a fresh
 confirmatory holdout. Dollar weighting is legitimate when the weights and available
 capital are known at decision time; disagreement with equal weighting alone proves no artifact.
+
+The full, unsampled [wallet study](reports/WALLETS.md) ranks 833,133 wallets on
+pre-2026 information. Copying the 97 selected wallets' 2026 trades 30 seconds later
+loses 0.85% on $57,564 of allocated capital, with a nominal interval of −2.9% to +1.3%.
+Faster copying, monthly reselection and large-trade following do not produce a reliable
+positive result either.
 
 A recovered September 19 live capture contains 61 scoring events across 14 games with a
 subsequent price move of at least three cents. Median book half-move time was 2.86 seconds
