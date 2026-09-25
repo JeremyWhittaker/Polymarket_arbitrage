@@ -39,6 +39,36 @@ reaction returned −4.57% using MLB receipts and −7.47% using Polymarket rece
 are hypothetical depth crossings on one already inspected day, with order acceptance and
 historical minimum-size constraints unobserved; they do not establish future returns.
 
+## Forward paper test (live since 2026-09-25)
+
+Polymarket has no paper-trading mode, and this test needs no account. Instead, a frozen engine
+applies the two leads to live public data as it arrives. It simulates each order against the
+order book exactly as received, and **never sends an order**. The rules were frozen before any
+data they judge existed. Test v1 was activated at 06:45:29 UTC on 2026-09-25
+([manifest](reports/paper/ACTIVATION.json)). Only games scheduled to start after that moment count.
+
+- **Soccer added-time leader** ([protocol](reports/PROSPECTIVE_SOCCER_PROTOCOL.md)): the endpoint
+  is 200 funded games, expected in roughly two to three months.
+- **MLB 10¢ inning discount** ([protocol](reports/PROSPECTIVE_PROTOCOL.md)): the endpoint is 500
+  games. About 90 games remain in 2026, so it mostly accrues during the 2027 season.
+
+At today's 0.05 fee, the MLB lead's historical interval already includes zero. The soccer lead's
+interval stays positive. The engine refreshes `data/paper/PAPER_TEST.md` and the research desk's "Forward paper tests" group every 15 minutes. [PAPER_TEST.md](reports/PAPER_TEST.md) is a committed snapshot, updated at milestones. The
+design is in
+[pmsports/paper/DESIGN.md](pmsports/paper/DESIGN.md).
+
+Polymarket US is a separate exchange with its own order book and a 0.0695 taker fee coefficient
+from 2026-09-25. This test observes the international book and reports the US fee only as a
+re-pricing scenario.
+
+Three user services run the test:
+
+| Service | Role |
+|---|---|
+| `pmsports-record.service` | Captures books, MLB linescores, ESPN soccer state and the Polymarket sports feed. |
+| `pmsports-paper.service` | Runs the engine; it settles positions and refreshes the report periodically. |
+| `pmsports-rotate.timer` | Gzips capture days more than two days old. |
+
 ## Data and execution rules
 
 - New collection defaults to **no eventual-volume floor**. `--min-volume` is an explicitly

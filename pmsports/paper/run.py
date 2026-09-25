@@ -141,7 +141,7 @@ def main(a) -> None:
     if a.action == "run":
         def periodic():
             settle.settle(out, live)
-            report.build(out, live)
+            report.build(out, live, out / "PAPER_TEST.md")   # live copy; reports/ holds committed snapshots
         summary = run(a.follow, a.since, a.until, live, out, model_dir=Path(a.model_dir) if a.model_dir else None,
                       periodic=periodic if a.follow else None)
         print(json.dumps({k: v for k, v in summary.items()}, default=str))
