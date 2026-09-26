@@ -15,6 +15,7 @@
   thresholds   pregame price thresholds by sport + MLB "leader below historical win rate" rule
   calibration  price vs realized win rate by sport ("the breaking point") -> reports/CALIBRATION.md
   paper        forward paper test (no orders): run [--follow] | settle | report | snapshot | activate
+  paper-us     US-venue forward paper test (no orders; previews only): run [--follow] | settle | report | activate
 """
 from __future__ import annotations
 
@@ -70,6 +71,19 @@ def main() -> None:
     pp.add_argument("--report", help="markdown path (default reports/PAPER_TEST.md)")
     pp.add_argument("--ledgers", help="ledger dir (default data/research/ledgers)")
     pp.add_argument("--model-dir", help="MLB model snapshot dir (default data/paper)")
+    pu = sub.add_parser("paper-us", help="US-venue forward paper test; never places orders (previews only)")
+    pu.add_argument("action", choices=["run", "settle", "report", "activate"])
+    pu.add_argument("--follow", action="store_true", help="tail the live capture (2 s lag); previews new entries")
+    pu.add_argument("--no-preview", action="store_true", help="follow without the exchange order-preview audit")
+    pu.add_argument("--since", help="replay start (ISO, UTC); default checkpoint - 36 h")
+    pu.add_argument("--until", help="replay end (ISO, UTC, exclusive)")
+    pu.add_argument("--force", action="store_true")
+    pu.add_argument("--live", default=str(Path(__file__).resolve().parent.parent / "data" / "live"))
+    pu.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "data" / "paper_us"))
+    pu.add_argument("--report", help="markdown path (default reports/PAPER_TEST_US.md)")
+    pu.add_argument("--ledgers", help="ledger dir (default data/research/ledgers)")
+    pu.add_argument("--model-dir", help="MLB model snapshot dir (default data/paper)")
+    pu.add_argument("--intl-settlements", help="v1 settlements.json for the flagged fallback (default data/paper)")
     a = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -128,6 +142,9 @@ def main() -> None:
     elif a.cmd == "paper":
         from .paper.run import main as paper_main
         paper_main(a)
+    elif a.cmd == "paper-us":
+        from .paper.us.run import main as paper_us_main
+        paper_us_main(a)
 
 
 if __name__ == "__main__":

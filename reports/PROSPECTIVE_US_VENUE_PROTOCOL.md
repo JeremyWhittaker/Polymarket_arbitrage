@@ -30,3 +30,19 @@ The international test ([MLB](PROSPECTIVE_PROTOCOL.md), [soccer](PROSPECTIVE_SOC
 ## Honesty rules
 
 The rules above were written before any US-venue book or trade data was captured in this project. Activation is recorded in `reports/paper/ACTIVATION_US.json`. Only games scheduled to start after activation count. US soccer coverage is narrower (for example EPL, La Liga, Bundesliga, Serie A, UEFA competitions and MLS), so the soccer endpoint may take longer than the international test's. A US result can confirm or contradict the international test; neither result can be used to choose the other's rules.
+
+## Mapping addendum — 2026-09-26 UTC
+
+This addendum was written before activation. It states how the Universe rule ("by event slug plus team identity, with orientation from the US market's team fields") is applied, because a literal reading does not fit the two venues' listings. It relies only on the US gateway's event listings: slugs, team names and fields, game ids and start times. It uses no US price, book, trade or paper result. Engineering smoke tests captured US books and trades into scratch directories outside `data/live`. None of that data informed this addendum. An engine shakedown did replay one 40-minute scratch capture to check code paths; its measurements are disclosed in [the US engine design](../pmsports/paper/us/DESIGN.md). No rule, threshold, delay or freshness setting changed afterwards, and none of that data counts as evidence.
+
+- **Link order.** A US event is linked to the international capture's game by, in order:
+  1. the identical event slug;
+  2. the identical Polymarket sports game id, which both venues carry;
+  3. both teams, by name or abbreviation, with starts within 45 minutes (MLB) or 30 minutes (soccer).
+
+  The venues abbreviate some teams differently. For example, the US uses `ath` and `az` where the international venue uses `oak` and `ari`. A slug-only rule would therefore drop those teams' games every time.
+- **Every link must still agree.** If a slug or game-id link's teams or start disagree with the international game (beyond 45 or 30 minutes), the mapping is ambiguous, not exact. If two US events claim one international game, both are ambiguous. A US mapping can be exact only when the international mapping is exact.
+- **Orientation.**
+  - MLB: the long side's `team.ordering` (home or away) must agree with team identity against the MLB home and away names. Otherwise the mapping is ambiguous.
+  - Soccer: `marketSides[].team.ordering` is a side position, not home or away; every long side reports "home". Soccer home and away therefore come from team identity against the international record's ESPN-oriented home and away teams. The thresholds are the international capture's: each team scores at least 0.70, and the orientation wins by at least 0.30.
+- **Freeze.** A game's mapping freezes at its start. A US event first mapped at or after its start is unmatched.

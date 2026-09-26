@@ -20,6 +20,8 @@ local receive time (recv_ms, NTP-synced clock assumed; never decreasing per file
                      change; a game whose last row before its start has none had no market
   market_meta.jsonl  per market: CLOB tick, minimum size, delay + Gamma fee, on change
   soccer_games.jsonl, espn.jsonl   soccer discovery and ESPN state (paper/capture_soccer.py)
+  us_map.jsonl, us_book.jsonl, us_trade.jsonl   Polymarket US venue: game mapping, markets
+                     websocket books and trades (paper/capture_us.py, read-only)
 
 Record formats: pmsports/paper/DESIGN.md. Files land in data/live/<UTC date>/.
 Run under tmux/systemd for a whole slate:
@@ -43,7 +45,7 @@ import websockets
 from . import polymarket as pm
 from .collect import DATA_DIR, _team_eq
 from .http import get_json
-from .paper import capture_soccer
+from .paper import capture_soccer, capture_us
 from .paper.rotate import open_capture
 
 log = logging.getLogger("pmsports")
@@ -649,8 +651,9 @@ async def _run(hours: float, window_h: float) -> None:
     games_ref = {"tokens": set(), "game_pks": set()}
     market_meta = MarketMeta(_Sink("market_meta"))
     soccer = capture_soccer.SoccerCapture(games_ref, _Sink("soccer_games"), _Sink("espn"), market_meta)
+    us = capture_us.UsCapture(_Sink("us_map"), _Sink("us_book"), _Sink("us_trade"))
     map_state: dict = {}
-    for name, seed in (("soccer", soccer.seed), ("mlb_map", lambda: seed_mlb_map(map_state))):
+    for name, seed in (("soccer", soccer.seed), ("mlb_map", lambda: seed_mlb_map(map_state)), ("us_map", us.seed)):
         try:
             seed()
         except Exception as exc:
@@ -663,6 +666,7 @@ async def _run(hours: float, window_h: float) -> None:
         _mlb(games_ref, _Sink("mlb"), stop),
         soccer.discover_loop(stop),
         soccer.espn_loop(stop),
+        us.run(stop),                     # never raises: a US-venue failure cannot stop this recorder
     )
 
 

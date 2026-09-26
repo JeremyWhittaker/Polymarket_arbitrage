@@ -389,6 +389,7 @@ def test_mlb_map_unmatched_and_moved_date():
 
 
 def test_map_slate_writes_on_change_rollover_and_one_to_one():
+    now = pm.parse_ts("2026-09-25T23:05:00Z") - 600               # pregame; never the real clock
     sched = {"dates": [{"date": "2026-09-25", "games": [_sg(1, "2026-09-25", "2026-09-25T23:05:00Z", NYY, BAL)]}]}
     g = _pm("a", "2026-09-25", "2026-09-25T23:05:00Z", NYY, BAL, cid="0xa")
     meta = R.MarketMeta(ListSink(), get=router((lambda u, p: "/markets/" in u,
@@ -397,14 +398,14 @@ def test_map_slate_writes_on_change_rollover_and_one_to_one():
                                                  "minimum_order_size": 5, "accepting_orders": True,
                                                  "closed": False})))
     out, last = ListSink(), {}
-    R._map_slate([g], sched, out, meta, False, last)
-    R._map_slate([g], sched, out, meta, False, last)
+    R._map_slate([g], sched, out, meta, False, last, now=now)
+    R._map_slate([g], sched, out, meta, False, last, now=now)
     assert len(out.rows) == 1 and len(meta.sink.rows) == 1        # unchanged: nothing re-written
-    R._map_slate([g], sched, out, meta, True, last)
+    R._map_slate([g], sched, out, meta, True, last, now=now)
     assert len(out.rows) == 2                                        # daily rollover re-writes
     assert meta.sink.rows[0]["tokens"] == ["H", "A"] and meta.sink.rows[0]["fee_rate"] == 0.05
     dup = _pm("b", "2026-09-25", "2026-09-25T23:00:00Z", NYY, BAL, cid="0xb")
-    recs = R._map_slate([g, dup], sched, None, None, False, {})
+    recs = R._map_slate([g, dup], sched, None, None, False, {}, now=now)
     assert [r["match"] for r in recs] == ["ambiguous", "ambiguous"]
 
 
