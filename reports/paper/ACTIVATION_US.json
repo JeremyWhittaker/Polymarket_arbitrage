@@ -1,0 +1,579 @@
+{
+ "activated_ms": 1790397134027,
+ "activated_utc": "2026-09-26T04:32:14.027107+00:00",
+ "code_files": {
+  "pmsports/book_replay.py": "f2655d7ceb74c0d9e5ad6a44f81d1ccec463aad275ab5cff07ce12e5599a5259",
+  "pmsports/paper/__init__.py": "8c1cf6e140622ab4771eca914051e2cf23528208c18afaa112be1fdbbebbede8",
+  "pmsports/paper/engine.py": "9e20c77bc563abb1dff5bcefa8f9e26ab31a90f4c5817fb7e8d2796ba671ea48",
+  "pmsports/paper/mlb.py": "a216c84d6d7223f591a09eca5029f8441c9b02fd8a523a76ddaea503b2bf4328",
+  "pmsports/paper/mlb_model.py": "1add0bdc2b8e319a466748de2030f42e7719d8ac6c832f7150b9a26851fbf33e",
+  "pmsports/paper/soccer.py": "6ed170af2241c7b33d7e62d43e5796ee7c0a677da44afdec8d2859819b56e156",
+  "pmsports/paper/spec.py": "66f74dcbb40233febfa7e7c976b8ad694d421979681ef6aacb0f65720ecafa3e",
+  "pmsports/paper/us/__init__.py": "6b8fa21fdb4f4702a96ffee8505747728d6717d8588a9273d429cfb44634551f",
+  "pmsports/paper/us/engine.py": "06132ab4b5840442bc1176645d76b6a9122b71177c325fe30ab651752cba4228",
+  "pmsports/paper/us/spec.py": "c24566ed2000d370791ae2c6b63472ec510c6e6124d0eb1c3b3f748fc70730cb",
+  "pmsports/paper/us/venue.py": "47b3e1edb3a6c0f773a64ea34c5325d61b3230f155a9257a1c5b9e5e58d432a3",
+  "pmsports/paper/us_api.py": "e07368ac9f2086635e4f8454d82f156e30996f39878b518ca1f4ac3fea617589",
+  "pmsports/research/h_soccer_continuation.py": "014498730ebc8136dd6766926f2b2a9393cbc41e6db0a08fcef91008eab9a05a"
+ },
+ "code_sha256": "842378e4d9151c12ca3e6028a7f88c3800bd7e8a6774c0efc887fd62f522db81",
+ "git_commit": "b65461f15a55fcb467d22d6e12c494eaab480299",
+ "git_dirty": [],
+ "model_snapshots": {
+  "2025": "42fcda2edee0f57ad44a83801708fbc761d8a633c6f3628f74f01e05a0fa5259"
+ },
+ "protocols": {
+  "pmsports/paper/DESIGN.md": "24dd2a334d9576c0338af2a5f63f73ae26690e465b6f61d26e9e97c9957dd827",
+  "pmsports/paper/us/DESIGN.md": "8a132df70feb34e38cef119319f74a1a0a71bd3b4b22dcb40f4cd645a494f9b2",
+  "reports/PROSPECTIVE_PROTOCOL.md": "b57e47101aad57c73fac2b4c517ae30d314924e9b9271398272f601b1ce3903c",
+  "reports/PROSPECTIVE_SOCCER_PROTOCOL.md": "5aaf2dfe61912509616b6b994f19d6cf76a1078c3040d6091e39269bf5963ae0",
+  "reports/PROSPECTIVE_US_VENUE_PROTOCOL.md": "4c120807264ba92228be8c25111a06d3a982f6e87e43e301687d936636292ad0"
+ },
+ "rules": {
+  "mlb_03c_us": "95d9dfbb2a91bf961b27a33778387a815f94cce470b3c3c387ce9ffb7f121dea",
+  "mlb_10c_us": "eae300e746d80a19ed21b818e33375f5032ff5796753e517f3a4276dd9518843",
+  "mlb_10c_us_delay2": "832f3899fe544b3557ecbf6e3c274740bafd130c10f9db0203fe6ff03a02e28e",
+  "mlb_10c_us_plus1c": "82bec49a27da4e45e3f568006a006c080b2c111ff8902bd2adb5b6eed8d5d47e",
+  "soccer_added_time_us": "a629a8719cb219f374ded6a4a4fea1524723b6758ce0c0f430118907278f6745",
+  "soccer_added_time_us_plus1c": "adfe73a986e68324ada349b68c40c527f4dc0c5a24bdf96d21616f9c8c0f47a5",
+  "soccer_ctrl_70_80_us": "7d78d9edb2a8e64e150cf75d8c069b51d4c36d4533363542d12f80eff86b281b",
+  "soccer_ctrl_75_85_us": "f8cbebbdaba6222d0cc2991c80016aeac3dcb8230d5234adaf22628d2eb84e6f",
+  "soccer_us_delay10": "2bd07af9ab65cefcc1ea4f23b15418cb0f4ba20af6b30c1101de32e50649e826",
+  "soccer_us_delay2": "bc6b7bd9bcae06d07496ca535472bcae279fce53ee8474ed0fd149cb5acc7b9e",
+  "soccer_us_delay60": "9f087d4d14184d4db02189cdc463156a6ffafaf73d490f7e6e764ad10fccec62"
+ },
+ "rules_json": {
+  "mlb_03c_us": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "mlb_03c_us",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "control",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "threshold": 0.03,
+   "trigger": "mlb_03c",
+   "trigger_rule_sha256": "2f54b92fa830a6528273e669182a98d5b14716340bb240c288ed1a23f370ff1f",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1"
+  },
+  "mlb_10c_us": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "mlb_10c_us",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "primary",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "threshold": 0.1,
+   "trigger": "mlb_10c",
+   "trigger_rule_sha256": "dca509eacee4b5858847d3476f2932a2027bcd171453151a8fec61d811a476a6",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1"
+  },
+  "mlb_10c_us_delay2": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "base": "mlb_10c_us",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 2,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "mlb_10c_us_delay2",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "threshold": 0.1,
+   "trigger": "mlb_10c_delay2",
+   "trigger_rule_sha256": "be99d05104f0c6c72c0e6e9d605f1884361fe27216c52a0b60bfabdc1a03321a",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1"
+  },
+  "mlb_10c_us_plus1c": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "base": "mlb_10c_us",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 0,
+   "model": "_baseline_we prior seasons",
+   "model_fallback": 0.5,
+   "model_min_n": 30,
+   "model_shrink": [
+    5,
+    10
+   ],
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "mlb_10c_us_plus1c",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "price_adj": 0.01,
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "report_only": true,
+   "role": "sensitivity",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "half_inning_start",
+   "sport": "mlb",
+   "trigger": "mlb_10c_plus1c",
+   "trigger_rule_sha256": "d8b0441d49f44f6acbfc93238e7d5d5ce670a8eacccb0b34a59db6a079b56c6c",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1"
+  },
+  "soccer_added_time_us": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_added_time_us",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "primary",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_added_time",
+   "trigger_rule_sha256": "b3ee90de710a6027d9504bdd1f09069377276aee61c2e78495122c60c623ef3b",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1",
+   "window": [
+    90,
+    null
+   ]
+  },
+  "soccer_added_time_us_plus1c": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time_us",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_added_time_us_plus1c",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "price_adj": 0.01,
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "report_only": true,
+   "role": "sensitivity",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_added_time_plus1c",
+   "trigger_rule_sha256": "5836f34610182f2f909131cdc1493fc8adcdf8711e2f3d7b494264ede34b2691",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1"
+  },
+  "soccer_ctrl_70_80_us": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_ctrl_70_80_us",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "control",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_ctrl_70_80",
+   "trigger_rule_sha256": "fe6516cf76d85e30cb4752d615dea5856343d67649161b27be2cbb31273997fd",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1",
+   "window": [
+    70,
+    80
+   ]
+  },
+  "soccer_ctrl_75_85_us": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_ctrl_75_85_us",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "control",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_ctrl_75_85",
+   "trigger_rule_sha256": "fc098b18fdce31e2db92ce79a5201f2b98f257322797c75428d750440ce408f7",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1",
+   "window": [
+    75,
+    85
+   ]
+  },
+  "soccer_us_delay10": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time_us",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 10,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_us_delay10",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_delay10",
+   "trigger_rule_sha256": "68e21ec40c1ed9e894e9de45930064dc28c466764e5acb19f23f3dd476e8a582",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1",
+   "window": [
+    90,
+    null
+   ]
+  },
+  "soccer_us_delay2": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time_us",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 2,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 3,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_us_delay2",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_delay2",
+   "trigger_rule_sha256": "b102d867fb07c5acaf2cf12cabed08da0f35eea0e033435b2f91edbd2a6e2de1",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1",
+   "window": [
+    90,
+    null
+   ]
+  },
+  "soccer_us_delay60": {
+   "admission": "latest us_map record received at or before the start, match exact",
+   "band": [
+    0.6,
+    0.97
+   ],
+   "base": "soccer_added_time_us",
+   "book": "MARKET_DATA full long-side snapshots; BUY_LONG crosses offers, BUY_SHORT crosses long bids at 1 - bid",
+   "bootstrap": {
+    "resamples": 2000,
+    "seed": 0
+   },
+   "budget_usd": 100.0,
+   "extra_delay_s": 0,
+   "fee_coefficient": 0.0695,
+   "fee_effective_utc": "2026-09-25",
+   "first_signal_per_game": true,
+   "freshness": "a book message for the market within 5 s of entry, no disconnect since",
+   "freshness_ms": 5000,
+   "hold_to_resolution": true,
+   "limit_offset": 0.01,
+   "mapping": "exact",
+   "min_delay_s": 60,
+   "order": "limit, immediate-or-cancel, received-book crossing, partial fills kept",
+   "policy": "soccer_us_delay60",
+   "preview_audit": {
+    "affects_decisions": false,
+    "max_lag_s": 15,
+    "max_per_s": 2
+   },
+   "quantity_increment_default": 1.0,
+   "reference": "last US trade on the leader's side strictly before the trigger; short side = 1 - long price",
+   "reference_max_age_s": 120,
+   "reference_strictly_before_signal": true,
+   "role": "sensitivity",
+   "settlement": "US /v1/markets/{slug}/settlement (long-side price)",
+   "signal": "first_new_key_event_period2_with_lead",
+   "sport": "soccer",
+   "trigger": "soccer_delay60",
+   "trigger_rule_sha256": "6ec767558d80b75adf6bfb7a41dc5bd3d052591d952ebc7363f81fce8790e767",
+   "trigger_version": "v1",
+   "venue": "polymarket_us",
+   "version": "us-v1",
+   "window": [
+    90,
+    null
+   ]
+  }
+ },
+ "spec_sha256": "116c315bda310f5b8808571dadb0bb6330da5635917648d73c7fa1437d40748e",
+ "support_files": {
+  "pmsports/paper/capture_us.py": "48c86c158f5e193e0b6d302f5820ee599dde97630a56df0594e42b340102f03f",
+  "pmsports/paper/us/preview.py": "c15e4c0241f12c039da78225b2a9c2a5854c92950fa9ecd72f6ccc6b78cbd210",
+  "pmsports/paper/us/report.py": "0f914a89a6a567cfa0af8499bef0d3d1d75a42c56afec548f70081ca57dbf223",
+  "pmsports/paper/us/run.py": "a950d67e8b31712abcfe7fc3e705853fcef90fe8c7ca6129860eba8281d28382",
+  "pmsports/paper/us/settle.py": "b5954e458b208f8895f8821af9b62676645c4a0c7de8063d061f5970a5d837ff",
+  "pmsports/record.py": "ed38f4fe8d1a99297ef22e28f563f762ccad449404bd093e8b6d823861868f23"
+ },
+ "taker_fee_sha256": "9a8883ae036f864c333e499175d433304ba228f651adb264034cb57fdea332ef",
+ "venue": "polymarket_us",
+ "version": "us-v1"
+}
