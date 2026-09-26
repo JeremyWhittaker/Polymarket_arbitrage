@@ -68,6 +68,22 @@ Three user services run the test:
 | `pmsports-record.service` | Captures books, MLB linescores, ESPN soccer state and the Polymarket sports feed. |
 | `pmsports-paper.service` | Runs the engine; it settles positions and refreshes the report periodically. |
 | `pmsports-rotate.timer` | Gzips capture days more than two days old. |
+| `pmsports-paper-us.service` | Runs the Polymarket US engine. |
+
+A second frozen test runs the same triggers against the **Polymarket US** order book
+([protocol](reports/PROSPECTIVE_US_VENUE_PROTOCOL.md)), using US fees and tick sizes. It
+was activated at 04:32:14 UTC on 2026-09-26. At each simulated entry it asks the exchange
+for an order *preview*: the exchange validates the order and reports its expected fills,
+but never places it. The US client (`pmsports/paper/us_api.py`) can sign only read and
+preview requests, and its key lives in the git-ignored `.env`.
+
+[MLB_INNING_PERFORMANCE.md](reports/MLB_INNING_PERFORMANCE.md) runs the historical 10¢ rule on a $100k account. It covers:
+- daily returns, drawdown, and Sharpe, Sortino and Calmar;
+- $100–$5,000 per-game sizing under each fee schedule;
+- real captured order-book depth;
+- a variant that switches sides every half-inning.
+
+It is still an in-sample backtest.
 
 ## Data and execution rules
 
